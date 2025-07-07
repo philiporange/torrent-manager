@@ -1,0 +1,4 @@
+bencode.py
+python-dotenv
+loguru
+sqlite3

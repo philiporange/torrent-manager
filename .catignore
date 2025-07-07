@@ -1,0 +1,6 @@
+assets/
+scripts/
+build/
+.git/
+*.egg-info/
+.*
