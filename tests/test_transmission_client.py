@@ -1,8 +1,8 @@
 import pytest
 import os
 import time
-from src.torrent_manager.config import Config
-from src.torrent_manager.transmission_client import TransmissionClient
+from torrent_manager.config import Config
+from torrent_manager.transmission_client import TransmissionClient
 
 
 TRANSMISSION_HOST = Config.TRANSMISSION_HOST

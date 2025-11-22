@@ -4,9 +4,9 @@ import os
 import datetime
 import time
 
-from src.torrent_manager.activity import Activity
-from src.torrent_manager.models import Status
-from src.torrent_manager.dbs import sdb as db
+from torrent_manager.activity import Activity
+from torrent_manager.models import Status
+from torrent_manager.dbs import sdb as db
 
 
 class TestActivity(unittest.TestCase):

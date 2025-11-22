@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Torrent Manager</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" rel="stylesheet">
+    <link href="/static/style.css" rel="stylesheet">
+</head>
+<body>
+
+    <!-- Login Page -->
+    <div id="loginPage" class="login-page">
+        <div class="login-card">
+            <div class="login-header">
+                <div class="icon"><i class="fas fa-bolt"></i></div>
+                <h3>Torrent Manager</h3>
+                <p class="text-muted">Sign in to manage your downloads</p>
+            </div>
+
+            <ul class="nav nav-pills nav-fill mb-4" role="tablist">
+                <li class="nav-item">
+                    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#loginTab" type="button">Login</button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#registerTab" type="button">Register</button>
+                </li>
+            </ul>
+
+            <div class="tab-content">
+                <!-- Login Tab -->
+                <div class="tab-pane fade show active" id="loginTab">
+                    <form onsubmit="login(event)">
+                        <div class="mb-3">
+                            <label class="form-label small text-muted fw-bold">USERNAME</label>
+                            <input type="text" class="form-control" id="loginUsername" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small text-muted fw-bold">PASSWORD</label>
+                            <input type="password" class="form-control" id="loginPassword" required>
+                        </div>
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" id="rememberMe">
+                            <label class="form-check-label small text-muted" for="rememberMe">Remember me</label>
+                        </div>
+                        <button type="submit" class="btn btn-primary w-100 py-2">Sign In</button>
+                    </form>
+                </div>
+
+                <!-- Register Tab -->
+                <div class="tab-pane fade" id="registerTab">
+                    <form onsubmit="register(event)">
+                        <div class="mb-3">
+                            <label class="form-label small text-muted fw-bold">CHOOSE USERNAME</label>
+                            <input type="text" class="form-control" id="registerUsername" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label small text-muted fw-bold">CHOOSE PASSWORD</label>
+                            <input type="password" class="form-control" id="registerPassword" required>
+                        </div>
+                        <button type="submit" class="btn btn-success w-100 py-2">Create Account</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- App Page -->
+    <div id="appPage" class="app-page d-none">
+        <nav class="navbar navbar-expand-lg navbar-light bg-white mb-4 sticky-top shadow-sm">
+            <div class="container">
+                <a class="navbar-brand" href="#">
+                    <i class="fas fa-bolt text-primary me-2"></i> Torrent Manager
+                </a>
+                
+                <div class="d-flex align-items-center gap-3">
+                    <div class="dropdown">
+                        <button class="btn btn-light btn-sm dropdown-toggle d-flex align-items-center gap-2" type="button" data-bs-toggle="dropdown">
+                            <i class="fas fa-user-circle text-muted"></i> <span id="username" class="fw-bold">User</span>
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end border-0 shadow">
+                            <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#apiKeysModal">
+                                <i class="fas fa-key me-2 text-muted"></i> API Keys
+                            </a></li>
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item text-danger" href="#" onclick="logout()">
+                                <i class="fas fa-sign-out-alt me-2"></i> Logout
+                            </a></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <div class="container">
+            <!-- Stats Overview -->
+            <div class="row g-3 mb-4">
+                <div class="col-md-4">
+                    <div class="card stats-card p-3">
+                        <div class="card-body p-0">
+                            <h6 class="card-title"><i class="fas fa-arrow-down text-success"></i> Download</h6>
+                            <div class="d-flex align-items-baseline justify-content-between mt-2">
+                                <h2 class="mb-0" id="globalDownSpeed">0 KB/s</h2>
+                                <small class="text-muted" id="totalDownloaded">Total: 0 B</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card stats-card p-3">
+                        <div class="card-body p-0">
+                            <h6 class="card-title"><i class="fas fa-arrow-up text-primary"></i> Upload</h6>
+                            <div class="d-flex align-items-baseline justify-content-between mt-2">
+                                <h2 class="mb-0" id="globalUpSpeed">0 KB/s</h2>
+                                <small class="text-muted" id="totalUploaded">Total: 0 B</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="card stats-card p-3">
+                        <div class="card-body p-0">
+                            <h6 class="card-title"><i class="fas fa-server text-warning"></i> Active</h6>
+                            <div class="d-flex align-items-baseline justify-content-between mt-2">
+                                <h2 class="mb-0" id="totalTorrents">0</h2>
+                                <small class="text-muted" id="activeTorrents">Downloading: 0</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Content Area -->
+            <div class="card shadow-sm">
+                <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0 fw-bold">Torrents</h5>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addTorrentModal">
+                            <i class="fas fa-plus me-2"></i> Add New
+                        </button>
+                        <button class="btn btn-light" id="togglePolling">
+                            <i class="fas fa-pause"></i> Pause
+                        </button>
+                        <button class="btn btn-light" id="refreshButton">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body position-relative min-vh-50">
+                    <div id="torrentsLoading" class="loading-overlay d-none">
+                        <div class="spinner-border text-primary" role="status"></div>
+                    </div>
+                    <div id="torrentsList">
+                        <!-- Torrents will be inserted here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Torrent Modal -->
+    <div class="modal fade" id="addTorrentModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header border-0 pb-0">
+                    <h5 class="modal-title fw-bold">Add Torrent</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <ul class="nav nav-tabs nav-fill mb-3" role="tablist">
+                        <li class="nav-item">
+                            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#magnetPane">Magnet</button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#filePane">File</button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#urlPane">URL</button>
+                        </li>
+                    </ul>
+
+                    <div class="tab-content">
+                        <div class="tab-pane fade show active" id="magnetPane">
+                            <form id="magnetForm">
+                                <input type="text" class="form-control mb-3" id="magnetInput" placeholder="magnet:?xt=urn:btih..." required>
+                                <button type="submit" class="btn btn-primary w-100">Add Magnet</button>
+                            </form>
+                        </div>
+                        <div class="tab-pane fade" id="filePane">
+                            <div id="dropZone" class="drop-zone mb-3">
+                                <i class="fas fa-cloud-upload-alt fa-2x mb-2 text-muted"></i>
+                                <div class="dz-message small">Click or drop .torrent file here</div>
+                                <input type="file" id="torrentInput" accept=".torrent" hidden>
+                            </div>
+                        </div>
+                        <div class="tab-pane fade" id="urlPane">
+                            <form id="urlForm">
+                                <input type="url" class="form-control mb-3" id="urlInput" placeholder="https://example.com/file.torrent" required>
+                                <button type="submit" class="btn btn-primary w-100">Add URL</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- API Keys Modal -->
+    <div class="modal fade" id="apiKeysModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold">API Keys</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="apiKeyForm" class="mb-4">
+                        <div class="input-group mb-2">
+                            <input type="text" class="form-control" id="apiKeyName" placeholder="Key Name (e.g. Script)" required>
+                            <input type="number" class="form-control" id="apiKeyExpires" placeholder="Days (opt)" style="max-width: 100px;">
+                            <button class="btn btn-primary" type="submit">Create</button>
+                        </div>
+                    </form>
+                    <div id="apiKeysList" class="small"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Global Drop Overlay -->
+    <div id="globalDropOverlay" class="global-drop-zone">
+        <div class="text-center">
+            <i class="fas fa-cloud-upload-alt fa-4x mb-3 text-primary"></i>
+            <h3 class="text-primary">Drop to Upload</h3>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+    <script src="/config.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>

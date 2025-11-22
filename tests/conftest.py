@@ -1,7 +1,7 @@
 import pytest
-from src.torrent_manager.docker_rtorrent import DockerRTorrent
-from src.torrent_manager.rtorrent_client import RTorrentClient
-from src.torrent_manager.config import Config
+from torrent_manager.docker_rtorrent import DockerRTorrent
+from torrent_manager.rtorrent_client import RTorrentClient
+from torrent_manager.config import Config
 
 @pytest.fixture(scope="session")
 def docker_rtorrent():

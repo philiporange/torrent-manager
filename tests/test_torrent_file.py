@@ -2,7 +2,7 @@ import unittest
 import os
 from urllib.parse import unquote
 
-from src.torrent_manager.torrent_file import TorrentFile
+from torrent_manager.torrent_file import TorrentFile
 
 
 class TestTorrentFile(unittest.TestCase):

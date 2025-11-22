@@ -1,3 +1,12 @@
+"""
+RTorrent XMLRPC client with comprehensive error handling.
+
+Provides the RTorrentClient class for interacting with rTorrent via XMLRPC,
+including adding torrents from files/URLs/magnets, managing torrent state,
+and querying torrent information. Features detailed error messages for
+invalid or malformed torrent files.
+"""
+
 import os
 import tempfile
 import time
@@ -8,7 +17,7 @@ import requests
 
 from .config import Config
 from .logger import logger
-from .torrent_file import TorrentFile
+from .torrent_file import TorrentFile, TorrentFileError, InvalidTorrentFileError, MissingRequiredKeyError
 from .magnet_link import MagnetLink
 
 
@@ -44,9 +53,18 @@ class RTorrentClient:
         # Get info_hash
         try:
             tf = TorrentFile(path)
+        except InvalidTorrentFileError as e:
+            logger.error(f"Invalid torrent file format: {e}")
+            raise ValueError(f"Invalid torrent file: {e}")
+        except MissingRequiredKeyError as e:
+            logger.error(f"Torrent file missing required fields: {e}")
+            raise ValueError(f"Invalid torrent file: {e}")
+        except TorrentFileError as e:
+            logger.error(f"Failed to read torrent file: {e}")
+            raise ValueError(f"Failed to read torrent file: {e}")
         except Exception as e:
-            logger.error(f"Failed to parse torrent file: {e}")
-            return
+            logger.error(f"Unexpected error parsing torrent file: {e}")
+            raise ValueError(f"Failed to parse torrent file: {e}")
 
         info_hash = tf.info_hash
         
@@ -72,10 +90,22 @@ class RTorrentClient:
         path = self.download_remote_file(url)
         try:
             tf = TorrentFile(path)
-        except Exception as e:
-            logger.error(f"Failed to parse torrent file: {e}")
+        except InvalidTorrentFileError as e:
+            logger.error(f"Invalid torrent file format from URL: {e}")
             os.remove(path)
-            return
+            raise ValueError(f"Invalid torrent file from URL: {e}")
+        except MissingRequiredKeyError as e:
+            logger.error(f"Torrent file from URL missing required fields: {e}")
+            os.remove(path)
+            raise ValueError(f"Invalid torrent file from URL: {e}")
+        except TorrentFileError as e:
+            logger.error(f"Failed to read torrent file from URL: {e}")
+            os.remove(path)
+            raise ValueError(f"Failed to read torrent file from URL: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error parsing torrent file from URL: {e}")
+            os.remove(path)
+            raise ValueError(f"Failed to parse torrent file from URL: {e}")
         
         with open(path, "rb") as f:
             data = f.read()

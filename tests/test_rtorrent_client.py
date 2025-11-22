@@ -1,7 +1,7 @@
 import pytest
 import os
 import time
-from src.torrent_manager.config import Config
+from torrent_manager.config import Config
 
 RTORRENT_RPC_URL = Config.RTORRENT_RPC_URL
 

@@ -35,7 +35,7 @@ CONTAINER_NAME = "rtorrent-manager"
 class Config:
     DEBUG = os.getenv("DEBUG", DEBUG)
     VERBOSE = os.getenv("VERBOSE", VERBOSE)
-    
+
     LOG_PATH = os.getenv("LOG_PATH", LOG_PATH)
     LOG_LEVEL = os.getenv("LOG_LEVEL", LOG_LEVEL)
     LOG_ROTATION = os.getenv("LOG_ROTATION", LOG_ROTATION)
@@ -55,6 +55,27 @@ class Config:
     REDISLITE_DB_PATH = os.getenv("REDISLITE_DB_PATH", REDISLITE_DB_PATH)
 
     CONTAINER_NAME = os.getenv("CONTAINER_NAME", CONTAINER_NAME)
+
+    # API Configuration
+    API_HOST = os.getenv("API_HOST", "localhost")
+    API_PORT = int(os.getenv("API_PORT", "8144"))
+    API_BASE_PATH = os.getenv("API_BASE_PATH", "").rstrip('/')
+
+    # Server Configuration
+    HOST = os.getenv("HOST", "0.0.0.0")
+    PORT = int(os.getenv("PORT", "8144"))
+
+    # Security Configuration
+    # Default to False for local HTTP development. Set COOKIE_SECURE=true in production with HTTPS.
+    COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+
+    @property
+    def API_BASE_URL(self):
+        """Construct the full API base URL."""
+        base = f"http://{self.API_HOST}:{self.API_PORT}"
+        if self.API_BASE_PATH:
+            base += f"/{self.API_BASE_PATH}"
+        return base
 
 
 class TestConfig:

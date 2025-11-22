@@ -1,7 +1,7 @@
 import time
 
 import pytest
-from src.torrent_manager.manager import Manager
+from torrent_manager.manager import Manager
 
 @pytest.fixture(scope="function")
 def manager(rtorrent_client):

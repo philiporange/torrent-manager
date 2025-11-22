@@ -1,4 +1,14 @@
-bencode.py
-python-dotenv
+bencodepy
+docker
+fastapi
+httpx
 loguru
-sqlite3
+passlib[bcrypt]
+peewee
+pytest
+pytest-asyncio
+python-dotenv
+python-multipart
+requests
+transmission-rpc
+uvicorn

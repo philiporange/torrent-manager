@@ -4,8 +4,8 @@ import xmlrpc.client
 
 import docker
 
-from src.torrent_manager.docker_rtorrent import DockerRTorrent
-from src.torrent_manager.config import Config
+from torrent_manager.docker_rtorrent import DockerRTorrent
+from torrent_manager.config import Config
 
 
 

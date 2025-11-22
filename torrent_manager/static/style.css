@@ -1,0 +1,210 @@
+/* Global Variables */
+:root {
+    --primary-color: #2563eb;
+    --primary-hover: #1d4ed8;
+    --bg-color: #f3f4f6;
+    --card-bg: #ffffff;
+    --text-primary: #1f2937;
+    --text-secondary: #6b7280;
+    --border-color: #e5e7eb;
+    --success-color: #10b981;
+    --warning-color: #f59e0b;
+    --danger-color: #ef4444;
+    --radius: 8px;
+    --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+}
+
+/* Utility Classes */
+.card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    border: none;
+    margin-bottom: 1rem;
+}
+
+.btn {
+    border-radius: var(--radius);
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.btn-primary {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.btn-primary:hover {
+    background-color: var(--primary-hover);
+    border-color: var(--primary-hover);
+}
+
+.text-muted {
+    color: var(--text-secondary) !important;
+}
+
+/* Login Page */
+.login-page {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--bg-color);
+}
+
+.login-card {
+    max-width: 400px;
+    width: 100%;
+    padding: 2rem;
+    border-radius: var(--radius);
+    background: var(--card-bg);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.login-header {
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+.login-header .icon {
+    font-size: 2.5rem;
+    color: var(--primary-color);
+    margin-bottom: 1rem;
+}
+
+.login-header h3 {
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+}
+
+/* Navigation */
+.navbar {
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border-color);
+    padding: 1rem 0;
+}
+
+.navbar-brand {
+    font-weight: 600;
+    color: var(--text-primary) !important;
+}
+
+/* App Page */
+.app-page {
+    padding-bottom: 2rem;
+}
+
+.stats-card {
+    height: 100%;
+    transition: transform 0.2s;
+}
+
+.stats-card:hover {
+    transform: translateY(-2px);
+}
+
+.stats-card .card-title {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* Torrent List */
+.torrent-card {
+    transition: transform 0.2s;
+}
+
+.torrent-card:hover {
+    transform: translateY(-2px);
+}
+
+.progress {
+    height: 0.5rem;
+    border-radius: 999px;
+    background-color: var(--bg-color);
+    margin: 1rem 0;
+}
+
+.progress-bar {
+    border-radius: 999px;
+}
+
+/* Drop Zone */
+.drop-zone {
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius);
+    padding: 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--bg-color);
+}
+
+.drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--primary-color);
+    background: #eff6ff;
+}
+
+.drop-zone .dz-message {
+    color: var(--text-secondary);
+}
+
+/* API Keys */
+.api-key-code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    background: var(--bg-color);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+}
+
+/* Loading Overlay */
+.loading-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.8);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 10;
+    backdrop-filter: blur(2px);
+    border-radius: var(--radius);
+}
+
+/* Global Drop Overlay */
+.global-drop-zone {
+    position: fixed;
+    inset: 0;
+    background: rgba(37, 99, 235, 0.1);
+    border: 4px dashed var(--primary-color);
+    z-index: 9999;
+    display: none;
+    justify-content: center;
+    align-items: center;
+    backdrop-filter: blur(4px);
+}
+
+.global-drop-zone.active {
+    display: flex;
+}
+
+.global-drop-zone .dz-message {
+    color: var(--primary-color);
+    text-align: center;
+}
