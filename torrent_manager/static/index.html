@@ -1,313 +1,195 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full bg-slate-50">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Torrent Manager</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
+    <title>Dashboard - Torrent Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" rel="stylesheet">
-    <link href="/static/style.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>body { font-family: 'Inter', sans-serif; }</style>
 </head>
-<body>
+<body class="h-full">
+    
+    <!-- Navbar Placeholder -->
+    <div id="navbar-placeholder"></div>
 
-    <!-- Login Page -->
-    <div id="loginPage" class="login-page">
-        <div class="login-card">
-            <div class="login-header">
-                <div class="icon"><i class="fas fa-bolt"></i></div>
-                <h3>Torrent Manager</h3>
-                <p class="text-muted">Sign in to manage your downloads</p>
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Header & Stats -->
+        <div class="mb-8">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+                <h2 class="text-2xl font-bold leading-7 text-slate-900 sm:text-3xl">
+                    Dashboard
+                </h2>
+                <div class="flex gap-3">
+                    <button onclick="openModal('addModal')" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
+                        <i class="fas fa-plus mr-2"></i> Add Torrent
+                    </button>
+                </div>
             </div>
 
-            <ul class="nav nav-pills nav-fill mb-4" role="tablist">
-                <li class="nav-item">
-                    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#loginTab" type="button">Login</button>
-                </li>
-                <li class="nav-item">
-                    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#registerTab" type="button">Register</button>
-                </li>
-            </ul>
-
-            <div class="tab-content">
-                <!-- Login Tab -->
-                <div class="tab-pane fade show active" id="loginTab">
-                    <form onsubmit="login(event)">
-                        <div class="mb-3">
-                            <label class="form-label small text-muted fw-bold">USERNAME</label>
-                            <input type="text" class="form-control" id="loginUsername" required>
+            <div class="grid grid-cols-2 lg:grid-cols-5 gap-4">
+                <div class="bg-white overflow-hidden shadow rounded-lg p-5 border border-slate-200">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 p-3 rounded-md bg-indigo-50 text-indigo-600">
+                            <i class="fas fa-arrow-down"></i>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label small text-muted fw-bold">PASSWORD</label>
-                            <input type="password" class="form-control" id="loginPassword" required>
+                        <div class="ml-4 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-slate-500 truncate">Down Speed</dt>
+                                <dd class="text-lg font-semibold text-slate-900" id="stat-down-speed">0 B/s</dd>
+                            </dl>
                         </div>
-                        <div class="mb-3 form-check">
-                            <input type="checkbox" class="form-check-input" id="rememberMe">
-                            <label class="form-check-label small text-muted" for="rememberMe">Remember me</label>
+                    </div>
+                </div>
+                
+                <div class="bg-white overflow-hidden shadow rounded-lg p-5 border border-slate-200">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 p-3 rounded-md bg-indigo-50 text-indigo-600">
+                            <i class="fas fa-arrow-up"></i>
                         </div>
-                        <button type="submit" class="btn btn-primary w-100 py-2">Sign In</button>
-                    </form>
+                        <div class="ml-4 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-slate-500 truncate">Up Speed</dt>
+                                <dd class="text-lg font-semibold text-slate-900" id="stat-up-speed">0 B/s</dd>
+                            </dl>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- Register Tab -->
-                <div class="tab-pane fade" id="registerTab">
-                    <form onsubmit="register(event)">
-                        <div class="mb-3">
-                            <label class="form-label small text-muted fw-bold">CHOOSE USERNAME</label>
-                            <input type="text" class="form-control" id="registerUsername" required>
+                <div class="bg-white overflow-hidden shadow rounded-lg p-5 border border-slate-200">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 p-3 rounded-md bg-indigo-50 text-indigo-600">
+                            <i class="fas fa-database"></i>
                         </div>
-                        <div class="mb-3">
-                            <label class="form-label small text-muted fw-bold">CHOOSE PASSWORD</label>
-                            <input type="password" class="form-control" id="registerPassword" required>
+                        <div class="ml-4 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-slate-500 truncate">Downloaded</dt>
+                                <dd class="text-lg font-semibold text-slate-900" id="stat-total-dl">0 B</dd>
+                            </dl>
                         </div>
-                        <button type="submit" class="btn btn-success w-100 py-2">Create Account</button>
-                    </form>
+                    </div>
+                </div>
+
+                <div class="bg-white overflow-hidden shadow rounded-lg p-5 border border-slate-200 hidden lg:block">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 p-3 rounded-md bg-indigo-50 text-indigo-600">
+                            <i class="fas fa-upload"></i>
+                        </div>
+                        <div class="ml-4 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-slate-500 truncate">Uploaded</dt>
+                                <dd class="text-lg font-semibold text-slate-900" id="stat-total-ul">0 B</dd>
+                            </dl>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white overflow-hidden shadow rounded-lg p-5 border border-slate-200">
+                    <div class="flex items-center">
+                        <div class="flex-shrink-0 p-3 rounded-md bg-indigo-50 text-indigo-600">
+                            <i class="fas fa-list"></i>
+                        </div>
+                        <div class="ml-4 w-0 flex-1">
+                            <dl>
+                                <dt class="text-sm font-medium text-slate-500 truncate">Active / Total</dt>
+                                <dd class="text-lg font-semibold text-slate-900">
+                                    <span id="stat-active">0</span> / <span id="stat-count">0</span>
+                                </dd>
+                            </dl>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
-    </div>
 
-    <!-- App Page -->
-    <div id="appPage" class="app-page d-none">
-        <nav class="navbar navbar-expand-lg navbar-light bg-white mb-4 sticky-top shadow-sm">
-            <div class="container">
-                <a class="navbar-brand" href="#">
-                    <i class="fas fa-bolt text-primary me-2"></i> Torrent Manager
-                </a>
-                
-                <div class="d-flex align-items-center gap-3">
-                    <div class="dropdown">
-                        <button class="btn btn-light btn-sm dropdown-toggle d-flex align-items-center gap-2" type="button" data-bs-toggle="dropdown">
-                            <i class="fas fa-user-circle text-muted"></i> <span id="username" class="fw-bold">User</span>
-                        </button>
-                        <ul class="dropdown-menu dropdown-menu-end border-0 shadow">
-                            <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#serversModal">
-                                <i class="fas fa-server me-2 text-muted"></i> Servers
-                            </a></li>
-                            <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#apiKeysModal">
-                                <i class="fas fa-key me-2 text-muted"></i> API Keys
-                            </a></li>
-                            <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item text-danger" href="#" onclick="logout()">
-                                <i class="fas fa-sign-out-alt me-2"></i> Logout
-                            </a></li>
-                        </ul>
-                    </div>
-                </div>
+        <!-- Torrents List -->
+        <div class="space-y-4">
+            <div id="loadingSpinner" class="flex justify-center py-12">
+                <i class="fas fa-circle-notch fa-spin text-indigo-500 text-3xl"></i>
             </div>
-        </nav>
-
-        <div class="container">
-            <!-- Stats Overview -->
-            <div class="row g-3 mb-4">
-                <div class="col-md-4">
-                    <div class="card stats-card p-3">
-                        <div class="card-body p-0">
-                            <h6 class="card-title"><i class="fas fa-arrow-down text-success"></i> Download</h6>
-                            <div class="d-flex align-items-baseline justify-content-between mt-2">
-                                <h2 class="mb-0" id="globalDownSpeed">0 KB/s</h2>
-                                <small class="text-muted" id="totalDownloaded">Total: 0 B</small>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="card stats-card p-3">
-                        <div class="card-body p-0">
-                            <h6 class="card-title"><i class="fas fa-arrow-up text-primary"></i> Upload</h6>
-                            <div class="d-flex align-items-baseline justify-content-between mt-2">
-                                <h2 class="mb-0" id="globalUpSpeed">0 KB/s</h2>
-                                <small class="text-muted" id="totalUploaded">Total: 0 B</small>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-md-4">
-                    <div class="card stats-card p-3">
-                        <div class="card-body p-0">
-                            <h6 class="card-title"><i class="fas fa-server text-warning"></i> Active</h6>
-                            <div class="d-flex align-items-baseline justify-content-between mt-2">
-                                <h2 class="mb-0" id="totalTorrents">0</h2>
-                                <small class="text-muted" id="activeTorrents">Downloading: 0</small>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Main Content Area -->
-            <div class="card shadow-sm">
-                <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0 fw-bold">Torrents</h5>
-                    <div class="d-flex gap-2">
-                        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addTorrentModal">
-                            <i class="fas fa-plus me-2"></i> Add New
-                        </button>
-                        <button class="btn btn-light" id="togglePolling">
-                            <i class="fas fa-pause"></i> Pause
-                        </button>
-                        <button class="btn btn-light" id="refreshButton">
-                            <i class="fas fa-sync-alt"></i>
-                        </button>
-                    </div>
-                </div>
-                <div class="card-body position-relative min-vh-50">
-                    <div id="torrentsLoading" class="loading-overlay d-none">
-                        <div class="spinner-border text-primary" role="status"></div>
-                    </div>
-                    <div id="torrentsList">
-                        <!-- Torrents will be inserted here -->
-                    </div>
-                </div>
-            </div>
+            <div id="torrentsList" class="grid grid-cols-1 gap-4"></div>
         </div>
     </div>
 
     <!-- Add Torrent Modal -->
-    <div class="modal fade" id="addTorrentModal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content border-0 shadow">
-                <div class="modal-header border-0 pb-0">
-                    <h5 class="modal-title fw-bold">Add Torrent</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+    <div id="addModal" class="fixed inset-0 z-50 overflow-y-auto hidden" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 bg-slate-500 bg-opacity-75 transition-opacity" aria-hidden="true" onclick="closeModal('addModal')"></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+            
+            <div class="relative inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6">
+                <div class="absolute top-0 right-0 pt-4 pr-4">
+                    <button type="button" onclick="closeModal('addModal')" class="bg-white rounded-md text-slate-400 hover:text-slate-500 focus:outline-none">
+                        <span class="sr-only">Close</span>
+                        <i class="fas fa-times"></i>
+                    </button>
                 </div>
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label class="form-label small text-muted fw-bold">ADD TO SERVER</label>
-                        <select class="form-select" id="targetServer" required>
-                            <option value="" disabled selected>Select a server...</option>
-                        </select>
-                    </div>
-
-                    <ul class="nav nav-tabs nav-fill mb-3" role="tablist">
-                        <li class="nav-item">
-                            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#magnetPane">Magnet</button>
-                        </li>
-                        <li class="nav-item">
-                            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#filePane">File</button>
-                        </li>
-                        <li class="nav-item">
-                            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#urlPane">URL</button>
-                        </li>
-                    </ul>
-
-                    <div class="tab-content">
-                        <div class="tab-pane fade show active" id="magnetPane">
-                            <form id="magnetForm">
-                                <input type="text" class="form-control mb-3" id="magnetInput" placeholder="magnet:?xt=urn:btih..." required>
-                                <button type="submit" class="btn btn-primary w-100">Add Magnet</button>
-                            </form>
-                        </div>
-                        <div class="tab-pane fade" id="filePane">
-                            <div id="dropZone" class="drop-zone mb-3">
-                                <i class="fas fa-cloud-upload-alt fa-2x mb-2 text-muted"></i>
-                                <div class="dz-message small">Click or drop .torrent file here</div>
-                                <input type="file" id="torrentInput" accept=".torrent" hidden>
-                            </div>
-                        </div>
-                        <div class="tab-pane fade" id="urlPane">
-                            <form id="urlForm">
-                                <input type="url" class="form-control mb-3" id="urlInput" placeholder="https://example.com/file.torrent" required>
-                                <button type="submit" class="btn btn-primary w-100">Add URL</button>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- API Keys Modal -->
-    <div class="modal fade" id="apiKeysModal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content border-0 shadow">
-                <div class="modal-header">
-                    <h5 class="modal-title fw-bold">API Keys</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <form id="apiKeyForm" class="mb-4">
-                        <div class="input-group mb-2">
-                            <input type="text" class="form-control" id="apiKeyName" placeholder="Key Name (e.g. Script)" required>
-                            <input type="number" class="form-control" id="apiKeyExpires" placeholder="Days (opt)" style="max-width: 100px;">
-                            <button class="btn btn-primary" type="submit">Create</button>
-                        </div>
-                    </form>
-                    <div id="apiKeysList" class="small"></div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Servers Modal -->
-    <div class="modal fade" id="serversModal" tabindex="-1" aria-hidden="true">
-        <div class="modal-dialog modal-lg modal-dialog-centered">
-            <div class="modal-content border-0 shadow">
-                <div class="modal-header">
-                    <h5 class="modal-title fw-bold">Torrent Servers</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <form id="addServerForm" class="mb-4">
-                        <input type="hidden" id="editingServerId" value="">
-                        <div class="row g-2">
-                            <div class="col-md-4">
-                                <input type="text" class="form-control" id="serverName" placeholder="Server Name" required>
-                            </div>
-                            <div class="col-md-2">
-                                <select class="form-select" id="serverType" required>
-                                    <option value="rtorrent">rTorrent</option>
-                                    <option value="transmission">Transmission</option>
+                
+                <div class="sm:flex sm:items-start">
+                    <div class="mt-3 text-center sm:mt-0 sm:text-left w-full">
+                        <h3 class="text-lg leading-6 font-medium text-slate-900" id="modal-title">Add Torrent</h3>
+                        
+                        <div class="mt-4">
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium text-slate-700 mb-1">Target Server</label>
+                                <select id="targetServer" class="block w-full pl-3 pr-10 py-2 text-base border-slate-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md border">
+                                    <option>Loading...</option>
                                 </select>
                             </div>
-                            <div class="col-md-3">
-                                <input type="text" class="form-control" id="serverHost" placeholder="Host" required>
+
+                            <div class="border-b border-slate-200 mb-4">
+                                <nav class="-mb-px flex space-x-8" aria-label="Tabs">
+                                    <a href="#" onclick="document.getElementById('magnetTab').classList.remove('hidden'); document.getElementById('fileTab').classList.add('hidden'); this.classList.add('border-indigo-500', 'text-indigo-600'); this.nextElementSibling.classList.remove('border-indigo-500', 'text-indigo-600'); this.nextElementSibling.classList.add('border-transparent', 'text-slate-500'); return false;" class="border-indigo-500 text-indigo-600 whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">
+                                        Magnet / URL
+                                    </a>
+                                    <a href="#" onclick="document.getElementById('fileTab').classList.remove('hidden'); document.getElementById('magnetTab').classList.add('hidden'); this.classList.add('border-indigo-500', 'text-indigo-600'); this.previousElementSibling.classList.remove('border-indigo-500', 'text-indigo-600'); this.previousElementSibling.classList.add('border-transparent', 'text-slate-500'); return false;" class="border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">
+                                        Torrent File
+                                    </a>
+                                </nav>
                             </div>
-                            <div class="col-md-2">
-                                <input type="number" class="form-control" id="serverPort" placeholder="Port" required>
+
+                            <!-- Magnet Form -->
+                            <div id="magnetTab">
+                                <form id="addMagnetForm">
+                                    <div class="mt-1">
+                                        <input type="text" id="magnetInput" class="shadow-sm focus:ring-indigo-500 focus:border-indigo-500 block w-full sm:text-sm border-slate-300 rounded-md h-10 px-3 border" placeholder="magnet:?xt=urn:btih... or https://..." required>
+                                    </div>
+                                    <div class="mt-4">
+                                        <button type="submit" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-indigo-600 text-base font-medium text-white hover:bg-indigo-700 focus:outline-none sm:text-sm">
+                                            Add Download
+                                        </button>
+                                    </div>
+                                </form>
                             </div>
-                            <div class="col-md-1">
-                                <button type="submit" id="serverFormSubmitBtn" class="btn btn-primary w-100">
-                                    <i class="fas fa-plus"></i>
-                                </button>
-                            </div>
-                        </div>
-                        <div class="row g-2 mt-2">
-                            <div class="col-md-3">
-                                <input type="text" class="form-control" id="serverUsername" placeholder="Username (optional)">
-                            </div>
-                            <div class="col-md-3">
-                                <input type="password" class="form-control" id="serverPassword" placeholder="Password (optional)">
-                            </div>
-                            <div class="col-md-4">
-                                <input type="text" class="form-control" id="serverRpcPath" placeholder="RPC Path (optional)">
-                            </div>
-                            <div class="col-md-2">
-                                <div class="form-check mt-2">
-                                    <input class="form-check-input" type="checkbox" id="serverUseSsl">
-                                    <label class="form-check-label small" for="serverUseSsl">Use SSL</label>
+
+                            <!-- File Upload -->
+                            <div id="fileTab" class="hidden">
+                                <div id="dropZone" class="max-w-lg flex justify-center px-6 pt-5 pb-6 border-2 border-slate-300 border-dashed rounded-md cursor-pointer hover:bg-slate-50 transition-colors">
+                                    <div class="space-y-1 text-center">
+                                        <i class="fas fa-cloud-upload-alt text-slate-400 text-3xl mb-3"></i>
+                                        <div class="flex text-sm text-slate-600">
+                                            <label for="fileInput" class="relative cursor-pointer bg-white rounded-md font-medium text-indigo-600 hover:text-indigo-500 focus-within:outline-none">
+                                                <span>Upload a file</span>
+                                                <input id="fileInput" name="file" type="file" accept=".torrent" class="sr-only">
+                                            </label>
+                                            <p class="pl-1">or drag and drop</p>
+                                        </div>
+                                        <p class="text-xs text-slate-500">
+                                            .torrent files only
+                                        </p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                    </form>
-                    <div id="serversList"></div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Global Drop Overlay -->
-    <div id="globalDropOverlay" class="global-drop-zone">
-        <div class="text-center">
-            <i class="fas fa-cloud-upload-alt fa-4x mb-3 text-primary"></i>
-            <h3 class="text-primary">Drop to Upload</h3>
-        </div>
-    </div>
-
-    <!-- Toast Container -->
-    <div class="toast-container position-fixed bottom-0 end-0 p-3"></div>
-
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
     <script src="/config.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="/static/js/common.js"></script>
+    <script src="/static/js/dashboard.js"></script>
 </body>
 </html>

@@ -355,7 +355,7 @@ class UserManager:
     """Manages user accounts."""
 
     @staticmethod
-    def create_user(username: str, password: str) -> User:
+    def create_user(username: str, password: str, is_admin: bool = False) -> User:
         """Create a new user with hashed password."""
         user_id = generate_secure_token(16)
         hashed_password = hash_password(password)
@@ -363,10 +363,11 @@ class UserManager:
         user = User.create(
             id=user_id,
             username=username,
-            password=hashed_password
+            password=hashed_password,
+            is_admin=is_admin
         )
 
-        logger.info(f"Created user {username} with ID {user_id}")
+        logger.info(f"Created user {username} (admin={is_admin}) with ID {user_id}")
         return user
 
     @staticmethod
@@ -391,3 +392,32 @@ class UserManager:
             return User.get(User.id == user_id)
         except User.DoesNotExist:
             return None
+
+    @staticmethod
+    def list_users() -> list[User]:
+        """List all users."""
+        return list(User.select())
+
+    @staticmethod
+    def update_user(user_id: str, password: Optional[str] = None, is_admin: Optional[bool] = None) -> Optional[User]:
+        """Update user details."""
+        try:
+            user = User.get(User.id == user_id)
+            if password:
+                user.password = hash_password(password)
+            if is_admin is not None:
+                user.is_admin = is_admin
+            user.save()
+            return user
+        except User.DoesNotExist:
+            return None
+
+    @staticmethod
+    def delete_user(user_id: str) -> bool:
+        """Delete a user."""
+        try:
+            user = User.get(User.id == user_id)
+            user.delete_instance()
+            return True
+        except User.DoesNotExist:
+            return False

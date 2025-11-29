@@ -12,11 +12,12 @@ Provides:
 import datetime
 import secrets
 from typing import Optional, List
-from fastapi import FastAPI, Request, Response, HTTPException, Depends, status, Form, UploadFile, File, Query
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, status, Form, UploadFile, File, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+import asyncio
 
 from .auth import SessionManager, UserManager, ApiKeyManager
 from .models import User, Session, ApiKey, TorrentServer
@@ -83,6 +84,17 @@ class UpdateServerRequest(BaseModel):
     rpc_path: Optional[str] = None
     use_ssl: Optional[bool] = None
     enabled: Optional[bool] = None
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    is_admin: bool = False
+
+
+class UpdateUserRequest(BaseModel):
+    password: Optional[str] = None
+    is_admin: Optional[bool] = None
 
 
 from fastapi.staticfiles import StaticFiles
@@ -373,9 +385,140 @@ async def get_me(request: Request, user: User = Depends(get_current_user)):
     return {
         "user_id": user.id,
         "username": user.username,
+        "is_admin": user.is_admin,
         "timestamp": user.timestamp.isoformat(),
         "auth_method": auth_method
     }
+
+
+async def get_current_admin(user: User = Depends(get_current_user)) -> User:
+    """Dependency to ensure the user is an admin."""
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required"
+        )
+    return user
+
+
+# --- Admin Endpoints ---
+
+@app.get("/admin/users")
+async def list_users(admin: User = Depends(get_current_admin)):
+    """List all users (Admin only)."""
+    users = UserManager.list_users()
+    return [
+        {
+            "id": u.id,
+            "username": u.username,
+            "is_admin": u.is_admin,
+            "created_at": u.timestamp.isoformat()
+        }
+        for u in users
+    ]
+
+
+@app.post("/admin/users")
+async def create_user_admin(
+    request: CreateUserRequest,
+    admin: User = Depends(get_current_admin)
+):
+    """Create a new user (Admin only)."""
+    try:
+        user = UserManager.create_user(
+            username=request.username,
+            password=request.password,
+            is_admin=request.is_admin
+        )
+        return {"message": "User created", "user_id": user.id}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/admin/users/{user_id}")
+async def update_user_admin(
+    user_id: str,
+    request: UpdateUserRequest,
+    admin: User = Depends(get_current_admin)
+):
+    """Update a user (Admin only)."""
+    user = UserManager.update_user(
+        user_id=user_id,
+        password=request.password,
+        is_admin=request.is_admin
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": "User updated"}
+
+
+@app.delete("/admin/users/{user_id}")
+async def delete_user_admin(
+    user_id: str,
+    admin: User = Depends(get_current_admin)
+):
+    """Delete a user (Admin only)."""
+    if user_id == admin.id:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    
+    success = UserManager.delete_user(user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"message": "User deleted"}
+
+
+@app.websocket("/admin/logs/ws")
+async def websocket_logs(websocket: WebSocket):
+    """WebSocket endpoint to stream logs."""
+    # We can't use standard dependency injection easily here for auth, so we'll check the cookie manually
+    # or require a token. For simplicity in this context, we'll verify the session cookie.
+    
+    # Verify Auth
+    session_id = websocket.cookies.get(SESSION_COOKIE_NAME)
+    is_admin = False
+    if session_id:
+        session = SessionManager.validate_session(session_id)
+        if session:
+            user = UserManager.get_user_by_id(session.user_id)
+            if user and user.is_admin:
+                is_admin = True
+    
+    if not is_admin:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    await websocket.accept()
+    
+    log_path = config.LOG_PATH
+    if not os.path.exists(log_path):
+        await websocket.send_text("Log file not found.")
+        await websocket.close()
+        return
+
+    try:
+        with open(log_path, "r") as f:
+            # Send last 20 lines first
+            lines = f.readlines()[-20:]
+            for line in lines:
+                await websocket.send_text(line.strip())
+            
+            # Tail the file
+            f.seek(0, os.SEEK_END)
+            while True:
+                line = f.readline()
+                if line:
+                    await websocket.send_text(line.strip())
+                else:
+                    await asyncio.sleep(0.5)
+    except Exception as e:
+        await websocket.send_text(f"Error reading log: {e}")
+        await websocket.close()
+
+
+@app.get("/admin/console")
+async def admin_page(user: User = Depends(get_current_admin)):
+    """Serve the admin console page."""
+    return FileResponse("torrent_manager/static/admin.html", media_type="text/html")
 
 
 @app.post("/auth/api-keys")
@@ -638,6 +781,24 @@ async def test_server(server_id: str, user: User = Depends(get_current_user)):
             "status": "failed",
             "message": str(e)
         }
+
+
+@app.get("/login")
+async def login_page():
+    """Serve the login page."""
+    return FileResponse("torrent_manager/static/login.html", media_type="text/html")
+
+
+@app.get("/manage-servers")
+async def servers_page():
+    """Serve the server management page."""
+    return FileResponse("torrent_manager/static/servers.html", media_type="text/html")
+
+
+@app.get("/manage-api-keys")
+async def api_keys_page():
+    """Serve the API key management page."""
+    return FileResponse("torrent_manager/static/api_keys.html", media_type="text/html")
 
 
 @app.get("/")

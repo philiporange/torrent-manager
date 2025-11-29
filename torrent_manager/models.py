@@ -19,6 +19,7 @@ class User(BaseModel):
     id = CharField(primary_key=True)
     username = CharField(index=True, unique=True)
     password = CharField()
+    is_admin = BooleanField(default=False)
     timestamp = DateTimeField(default=datetime.datetime.now)
 
 
