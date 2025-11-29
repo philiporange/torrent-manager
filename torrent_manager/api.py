@@ -4,21 +4,23 @@ FastAPI application with secure session-based authentication and torrent managem
 Provides:
 - HTTP-only secure session cookies with sliding expiration and remember-me functionality
 - API key authentication for programmatic access
+- Multi-server torrent management (rTorrent and Transmission)
 - Full torrent management (add, start, stop, remove, list)
 - CORS middleware for frontend access
 """
 
 import datetime
-from typing import Optional
-from fastapi import FastAPI, Request, Response, HTTPException, Depends, status, Form, UploadFile, File
+import secrets
+from typing import Optional, List
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, status, Form, UploadFile, File, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .auth import SessionManager, UserManager, ApiKeyManager
-from .models import User, Session, ApiKey
-from .rtorrent_client import RTorrentClient
+from .models import User, Session, ApiKey, TorrentServer
+from .client_factory import get_client
 from .logger import logger
 from .config import Config
 import os
@@ -53,6 +55,7 @@ class CreateApiKeyRequest(BaseModel):
 
 class AddTorrentRequest(BaseModel):
     uri: str  # Magnet URI or HTTP/HTTPS URL to torrent file
+    server_id: str  # Which server to add the torrent to
     start: bool = True
 
 
@@ -60,12 +63,34 @@ class TorrentActionRequest(BaseModel):
     info_hash: str
 
 
+class AddServerRequest(BaseModel):
+    name: str
+    server_type: str  # "rtorrent" or "transmission"
+    host: str
+    port: int
+    username: Optional[str] = None
+    password: Optional[str] = None
+    rpc_path: Optional[str] = None  # For rTorrent (e.g., "/RPC2")
+    use_ssl: bool = False
+
+
+class UpdateServerRequest(BaseModel):
+    name: Optional[str] = None
+    host: Optional[str] = None
+    port: Optional[int] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    rpc_path: Optional[str] = None
+    use_ssl: Optional[bool] = None
+    enabled: Optional[bool] = None
+
+
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(
     title="Torrent Manager API",
-    description="API for managing rTorrent instances with secure session-based authentication",
-    version="1.0.0"
+    description="API for managing torrent servers (rTorrent and Transmission) with secure session-based authentication",
+    version="2.0.0"
 )
 
 # Mount static files
@@ -439,6 +464,182 @@ async def revoke_api_key(
     }
 
 
+# Server Management Endpoints
+
+def get_user_server(server_id: str, user: User) -> TorrentServer:
+    """Get a server by ID, ensuring it belongs to the user."""
+    try:
+        server = TorrentServer.get(TorrentServer.id == server_id)
+        if server.user_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Server not found"
+            )
+        return server
+    except TorrentServer.DoesNotExist:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Server not found"
+        )
+
+
+@app.post("/servers")
+async def add_server(request: AddServerRequest, user: User = Depends(get_current_user)):
+    """Add a new torrent server configuration."""
+    if request.server_type not in ("rtorrent", "transmission"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="server_type must be 'rtorrent' or 'transmission'"
+        )
+
+    server_id = secrets.token_urlsafe(16)
+    server = TorrentServer.create(
+        id=server_id,
+        user_id=user.id,
+        name=request.name,
+        server_type=request.server_type,
+        host=request.host,
+        port=request.port,
+        username=request.username,
+        password=request.password,
+        rpc_path=request.rpc_path,
+        use_ssl=request.use_ssl,
+        enabled=True
+    )
+
+    return {
+        "id": server.id,
+        "user_id": server.user_id,
+        "name": server.name,
+        "server_type": server.server_type,
+        "host": server.host,
+        "port": server.port,
+        "username": server.username,
+        "password": server.password,
+        "rpc_path": server.rpc_path,
+        "use_ssl": server.use_ssl,
+        "enabled": server.enabled,
+        "created_at": server.created_at.isoformat()
+    }
+
+
+@app.get("/servers")
+async def list_servers(user: User = Depends(get_current_user)):
+    """List all torrent servers for the current user."""
+    servers = TorrentServer.select().where(TorrentServer.user_id == user.id)
+    return [
+        {
+            "id": s.id,
+            "name": s.name,
+            "server_type": s.server_type,
+            "host": s.host,
+            "port": s.port,
+            "rpc_path": s.rpc_path,
+            "use_ssl": s.use_ssl,
+            "enabled": s.enabled,
+            "created_at": s.created_at.isoformat()
+        }
+        for s in servers
+    ]
+
+
+@app.get("/servers/{server_id}")
+async def get_server(server_id: str, user: User = Depends(get_current_user)):
+    """Get details of a specific server."""
+    server = get_user_server(server_id, user)
+    return {
+        "id": server.id,
+        "name": server.name,
+        "server_type": server.server_type,
+        "host": server.host,
+        "port": server.port,
+        "username": server.username,
+        "rpc_path": server.rpc_path,
+        "use_ssl": server.use_ssl,
+        "enabled": server.enabled,
+        "created_at": server.created_at.isoformat()
+    }
+
+
+@app.put("/servers/{server_id}")
+async def update_server(
+    server_id: str,
+    request: UpdateServerRequest,
+    user: User = Depends(get_current_user)
+):
+    """Update a server configuration."""
+    server = get_user_server(server_id, user)
+
+    if request.name is not None:
+        server.name = request.name
+    if request.host is not None:
+        server.host = request.host
+    if request.port is not None:
+        server.port = request.port
+    if request.username is not None:
+        server.username = request.username
+    if request.password is not None:
+        server.password = request.password
+    if request.rpc_path is not None:
+        server.rpc_path = request.rpc_path
+    if request.use_ssl is not None:
+        server.use_ssl = request.use_ssl
+    if request.enabled is not None:
+        server.enabled = request.enabled
+
+    server.save()
+
+    return {
+        "id": server.id,
+        "user_id": server.user_id,
+        "name": server.name,
+        "server_type": server.server_type,
+        "host": server.host,
+        "port": server.port,
+        "username": server.username,
+        "password": server.password,
+        "rpc_path": server.rpc_path,
+        "use_ssl": server.use_ssl,
+        "enabled": server.enabled,
+        "created_at": server.created_at.isoformat()
+    }
+
+
+@app.delete("/servers/{server_id}")
+async def delete_server(server_id: str, user: User = Depends(get_current_user)):
+    """Delete a server configuration."""
+    server = get_user_server(server_id, user)
+    server.delete_instance()
+    return {"status": "deleted", "message": "Server deleted successfully"}
+
+
+@app.post("/servers/{server_id}/test")
+async def test_server(server_id: str, user: User = Depends(get_current_user)):
+    """Test connection to a server."""
+    server = get_user_server(server_id, user)
+
+    try:
+        client = get_client(server)
+        connected = client.check_connection()
+
+        if connected:
+            return {
+                "status": "connected",
+                "message": f"Successfully connected to {server.name}"
+            }
+        else:
+            return {
+                "status": "failed",
+                "message": f"Could not connect to {server.name}"
+            }
+    except Exception as e:
+        logger.error(f"Failed to test server {server_id}: {e}")
+        return {
+            "status": "failed",
+            "message": str(e)
+        }
+
+
 @app.get("/")
 async def root():
     """Serve the frontend index.html."""
@@ -469,40 +670,83 @@ async def health():
 
 # Torrent Management Endpoints
 
+def find_torrent_server(info_hash: str, user: User) -> tuple:
+    """Find which server has a torrent by its hash."""
+    servers = TorrentServer.select().where(
+        (TorrentServer.user_id == user.id) & (TorrentServer.enabled == True)
+    )
+
+    for server in servers:
+        try:
+            client = get_client(server)
+            torrent = next(client.get_torrent(info_hash), None)
+            if torrent:
+                return server, client, torrent
+        except Exception:
+            continue
+
+    return None, None, None
+
+
 @app.get("/torrents")
-async def list_torrents(user: User = Depends(get_current_user)):
+async def list_torrents(
+    server_id: Optional[str] = Query(None, description="Filter by server ID"),
+    user: User = Depends(get_current_user)
+):
     """
-    List all torrents from the torrent client.
+    List all torrents from all configured servers.
+
+    Optionally filter by server_id to list torrents from a specific server.
 
     Returns detailed information about each torrent including:
-    - Name, hash, size
+    - Name, hash, size, server info
     - Progress, state (active/paused)
     - Download/upload rates
     - Peers, ratio
     """
-    try:
-        client = RTorrentClient()
-        torrents = list(client.list_torrents())
-        return torrents
-    except Exception as e:
-        logger.error(f"Failed to list torrents: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to list torrents: {str(e)}"
+    all_torrents = []
+
+    if server_id:
+        # Filter by specific server
+        servers = [get_user_server(server_id, user)]
+    else:
+        # Get all enabled servers for this user
+        servers = TorrentServer.select().where(
+            (TorrentServer.user_id == user.id) & (TorrentServer.enabled == True)
         )
+
+    for server in servers:
+        try:
+            client = get_client(server)
+            torrents = list(client.list_torrents())
+
+            # Add server info to each torrent
+            for torrent in torrents:
+                torrent["server_id"] = server.id
+                torrent["server_name"] = server.name
+                torrent["server_type"] = server.server_type
+
+            all_torrents.extend(torrents)
+        except Exception as e:
+            logger.error(f"Failed to list torrents from server {server.name}: {e}")
+            # Continue with other servers even if one fails
+
+    return all_torrents
 
 
 @app.post("/torrents")
 async def add_torrent(request: AddTorrentRequest, user: User = Depends(get_current_user)):
     """
-    Add a torrent by magnet URI or HTTP/HTTPS URL.
+    Add a torrent by magnet URI or HTTP/HTTPS URL to a specific server.
 
     Supports:
     - Magnet URIs (magnet:?xt=urn:btih:...)
     - HTTP/HTTPS URLs to .torrent files
     """
+    server = get_user_server(request.server_id, user)
+
     try:
-        client = RTorrentClient()
+        client = get_client(server)
         uri = request.uri.strip()
 
         if uri.startswith("magnet:"):
@@ -516,23 +760,26 @@ async def add_torrent(request: AddTorrentRequest, user: User = Depends(get_curre
             )
 
         if result:
-            return {"message": "Torrent added successfully", "uri": uri}
+            return {
+                "message": "Torrent added successfully",
+                "uri": uri,
+                "server_id": server.id,
+                "server_name": server.name
+            }
         else:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to add torrent to rTorrent"
+                detail=f"Failed to add torrent to {server.name}"
             )
     except HTTPException:
         raise
     except ValueError as e:
-        # Invalid torrent file format from URL or invalid magnet URI
         logger.error(f"Invalid torrent: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except Exception as e:
-        # Unexpected error
         logger.error(f"Failed to add torrent: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -543,46 +790,48 @@ async def add_torrent(request: AddTorrentRequest, user: User = Depends(get_curre
 @app.post("/torrents/upload")
 async def upload_torrent(
     file: UploadFile = File(...),
+    server_id: str = Query(..., description="Server to add the torrent to"),
     start: bool = True,
     user: User = Depends(get_current_user)
 ):
     """
-    Upload a .torrent file directly.
+    Upload a .torrent file directly to a specific server.
     """
+    server = get_user_server(server_id, user)
     tmp_path = None
+
     try:
-        # Validate file extension
         if not file.filename.endswith('.torrent'):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="File must have .torrent extension"
             )
 
-        # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix=".torrent") as tmp:
             content = await file.read()
             tmp.write(content)
-            tmp.flush()  # Ensure all data is written to disk
+            tmp.flush()
             tmp_path = tmp.name
 
-        # Add to client
-        client = RTorrentClient()
+        client = get_client(server)
         result = client.add_torrent(tmp_path, start=start)
 
-        # Clean up temp file
         os.remove(tmp_path)
 
         if result:
-            return {"message": "Torrent uploaded and added successfully"}
+            return {
+                "message": "Torrent uploaded and added successfully",
+                "server_id": server.id,
+                "server_name": server.name
+            }
         else:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to add torrent to rTorrent"
+                detail=f"Failed to add torrent to {server.name}"
             )
     except HTTPException:
         raise
     except ValueError as e:
-        # Invalid torrent file format
         logger.error(f"Invalid torrent file uploaded: {e}")
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -591,7 +840,6 @@ async def upload_torrent(
             detail=str(e)
         )
     except Exception as e:
-        # Unexpected error
         logger.error(f"Failed to upload torrent: {e}")
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -602,38 +850,69 @@ async def upload_torrent(
 
 
 @app.get("/torrents/{info_hash}")
-async def get_torrent(info_hash: str, user: User = Depends(get_current_user)):
+async def get_torrent_info(
+    info_hash: str,
+    server_id: Optional[str] = Query(None, description="Server ID (optional, will search all if not provided)"),
+    user: User = Depends(get_current_user)
+):
     """
     Get detailed information about a specific torrent.
+
+    If server_id is not provided, searches across all user's servers.
     """
-    try:
-        client = RTorrentClient()
-        torrent = next(client.get_torrent(info_hash), None)
+    if server_id:
+        server = get_user_server(server_id, user)
+        try:
+            client = get_client(server)
+            torrent = next(client.get_torrent(info_hash), None)
+            if torrent:
+                torrent["server_id"] = server.id
+                torrent["server_name"] = server.name
+                torrent["server_type"] = server.server_type
+                return torrent
+        except Exception as e:
+            logger.error(f"Failed to get torrent: {e}")
 
-        if not torrent:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Torrent not found"
-            )
-
-        return torrent
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get torrent: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get torrent: {str(e)}"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Torrent not found"
         )
+
+    # Search all servers
+    server, client, torrent = find_torrent_server(info_hash, user)
+    if torrent:
+        torrent["server_id"] = server.id
+        torrent["server_name"] = server.name
+        torrent["server_type"] = server.server_type
+        return torrent
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Torrent not found on any server"
+    )
 
 
 @app.post("/torrents/{info_hash}/start")
-async def start_torrent(info_hash: str, user: User = Depends(get_current_user)):
+async def start_torrent(
+    info_hash: str,
+    server_id: Optional[str] = Query(None, description="Server ID"),
+    user: User = Depends(get_current_user)
+):
     """Start a paused torrent."""
+    if server_id:
+        server = get_user_server(server_id, user)
+        client = get_client(server)
+    else:
+        server, client, _ = find_torrent_server(info_hash, user)
+        if not server:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Torrent not found on any server"
+            )
+
     try:
-        client = RTorrentClient()
         client.start(info_hash)
-        return {"message": "Torrent started", "info_hash": info_hash}
+        return {"message": "Torrent started", "info_hash": info_hash, "server_id": server.id}
     except Exception as e:
         logger.error(f"Failed to start torrent: {e}")
         raise HTTPException(
@@ -643,12 +922,26 @@ async def start_torrent(info_hash: str, user: User = Depends(get_current_user)):
 
 
 @app.post("/torrents/{info_hash}/stop")
-async def stop_torrent(info_hash: str, user: User = Depends(get_current_user)):
+async def stop_torrent(
+    info_hash: str,
+    server_id: Optional[str] = Query(None, description="Server ID"),
+    user: User = Depends(get_current_user)
+):
     """Stop/pause a torrent."""
+    if server_id:
+        server = get_user_server(server_id, user)
+        client = get_client(server)
+    else:
+        server, client, _ = find_torrent_server(info_hash, user)
+        if not server:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Torrent not found on any server"
+            )
+
     try:
-        client = RTorrentClient()
         client.stop(info_hash)
-        return {"message": "Torrent stopped", "info_hash": info_hash}
+        return {"message": "Torrent stopped", "info_hash": info_hash, "server_id": server.id}
     except Exception as e:
         logger.error(f"Failed to stop torrent: {e}")
         raise HTTPException(
@@ -658,16 +951,30 @@ async def stop_torrent(info_hash: str, user: User = Depends(get_current_user)):
 
 
 @app.delete("/torrents/{info_hash}")
-async def delete_torrent(info_hash: str, user: User = Depends(get_current_user)):
+async def delete_torrent(
+    info_hash: str,
+    server_id: Optional[str] = Query(None, description="Server ID"),
+    user: User = Depends(get_current_user)
+):
     """
-    Remove a torrent from the client.
+    Remove a torrent from the server.
 
     Note: This does not delete the downloaded files.
     """
+    if server_id:
+        server = get_user_server(server_id, user)
+        client = get_client(server)
+    else:
+        server, client, _ = find_torrent_server(info_hash, user)
+        if not server:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Torrent not found on any server"
+            )
+
     try:
-        client = RTorrentClient()
         client.erase(info_hash)
-        return {"message": "Torrent removed", "info_hash": info_hash}
+        return {"message": "Torrent removed", "info_hash": info_hash, "server_id": server.id}
     except Exception as e:
         logger.error(f"Failed to remove torrent: {e}")
         raise HTTPException(

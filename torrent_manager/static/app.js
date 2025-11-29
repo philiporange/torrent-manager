@@ -71,12 +71,16 @@ async function apiRequest(endpoint, options = {}) {
 
 // --- Auth Logic ---
 
+// --- Global State ---
+let servers = [];
+
 async function checkAuth() {
     try {
         const user = await apiRequest('/auth/me');
         document.getElementById('username').textContent = user.username;
         document.getElementById('loginPage').classList.add('d-none');
         document.getElementById('appPage').classList.remove('d-none');
+        await loadServers();
         loadTorrents();
         return true;
     } catch {
@@ -180,10 +184,11 @@ function updateGlobalStats(stats, count) {
 
 function renderTorrentList(torrents, container) {
     if (torrents.length === 0) {
+        const hasServers = servers.length > 0;
         container.innerHTML = `
             <div class="text-center py-5 text-muted">
-                <i class="fas fa-inbox fa-3x mb-3"></i>
-                <p>No torrents found. Add one to get started.</p>
+                <i class="fas fa-${hasServers ? 'inbox' : 'server'} fa-3x mb-3"></i>
+                <p>${hasServers ? 'No torrents found. Add one to get started.' : 'No servers configured. Add a server first.'}</p>
             </div>
         `;
         return;
@@ -193,6 +198,7 @@ function renderTorrentList(torrents, container) {
         const pct = (t.progress * 100).toFixed(1);
         const isFinished = t.complete || t.state === 'finished';
         const statusColor = isFinished ? 'success' : 'primary';
+        const serverBadgeColor = t.server_type === 'rtorrent' ? 'primary' : 'success';
 
         return `
         <div class="card torrent-card mb-3">
@@ -202,29 +208,32 @@ function renderTorrentList(torrents, container) {
                         <h6 class="card-title mb-1 text-truncate" title="${t.name || t.info_hash}">
                             ${t.name || t.info_hash}
                         </h6>
-                        <span class="badge bg-${statusColor} bg-opacity-10 text-${statusColor} border border-${statusColor} border-opacity-10">
+                        <span class="badge bg-${statusColor} bg-opacity-10 text-${statusColor} border border-${statusColor} border-opacity-10 me-1">
                             ${t.state || 'unknown'}
                         </span>
+                        ${t.server_name ? `<span class="badge bg-${serverBadgeColor} bg-opacity-10 text-${serverBadgeColor} border border-${serverBadgeColor} border-opacity-10">
+                            <i class="fas fa-server me-1"></i>${t.server_name}
+                        </span>` : ''}
                     </div>
                     <div class="btn-group">
                         ${t.is_active ?
-                            `<button class="btn btn-sm btn-outline-warning" onclick="stopTorrent('${t.info_hash}')" title="Pause">
+                            `<button class="btn btn-sm btn-outline-warning" onclick="stopTorrent('${t.info_hash}', '${t.server_id}')" title="Pause">
                                 <i class="fas fa-pause"></i>
                             </button>` :
-                            `<button class="btn btn-sm btn-outline-success" onclick="startTorrent('${t.info_hash}')" title="Resume">
+                            `<button class="btn btn-sm btn-outline-success" onclick="startTorrent('${t.info_hash}', '${t.server_id}')" title="Resume">
                                 <i class="fas fa-play"></i>
                             </button>`
                         }
-                        <button class="btn btn-sm btn-outline-danger" onclick="removeTorrent('${t.info_hash}')" title="Remove">
+                        <button class="btn btn-sm btn-outline-danger" onclick="removeTorrent('${t.info_hash}', '${t.server_id}')" title="Remove">
                             <i class="fas fa-trash"></i>
                         </button>
                     </div>
                 </div>
-                
+
                 <div class="progress" style="height: 6px;">
                     <div class="progress-bar bg-${statusColor}" style="width: ${pct}%"></div>
                 </div>
-                
+
                 <div class="d-flex justify-content-between text-muted small mt-2">
                     <span>${pct}%</span>
                     <span><i class="fas fa-arrow-down"></i> ${formatSpeed(t.download_rate || 0)}</span>
@@ -238,23 +247,41 @@ function renderTorrentList(torrents, container) {
     }).join('');
 }
 
+function getSelectedServer() {
+    const select = document.getElementById('targetServer');
+    if (!select || !select.value) {
+        showToast('Please select a server first', 'danger');
+        return null;
+    }
+    return select.value;
+}
+
 async function addMagnet(uri) {
-    await apiRequest('/torrents', { method: 'POST', body: JSON.stringify({ uri }) });
+    const server_id = getSelectedServer();
+    if (!server_id) return;
+
+    await apiRequest('/torrents', { method: 'POST', body: JSON.stringify({ uri, server_id }) });
     showToast('Magnet added successfully');
     loadTorrents();
 }
 
 async function addUrl(uri) {
-    await apiRequest('/torrents', { method: 'POST', body: JSON.stringify({ uri }) });
+    const server_id = getSelectedServer();
+    if (!server_id) return;
+
+    await apiRequest('/torrents', { method: 'POST', body: JSON.stringify({ uri, server_id }) });
     showToast('URL added successfully');
     loadTorrents();
 }
 
 async function addTorrentFile(file) {
+    const server_id = getSelectedServer();
+    if (!server_id) return;
+
     const formData = new FormData();
     formData.append('file', file);
-    
-    const response = await fetch(`${API_BASE}/torrents/upload`, {
+
+    const response = await fetch(`${API_BASE}/torrents/upload?server_id=${server_id}`, {
         method: 'POST',
         credentials: 'include',
         body: formData
@@ -269,21 +296,24 @@ async function addTorrentFile(file) {
     loadTorrents();
 }
 
-async function startTorrent(hash) {
-    await apiRequest(`/torrents/${hash}/start`, { method: 'POST' });
+async function startTorrent(hash, serverId) {
+    const query = serverId ? `?server_id=${serverId}` : '';
+    await apiRequest(`/torrents/${hash}/start${query}`, { method: 'POST' });
     showToast('Torrent started');
     loadTorrents();
 }
 
-async function stopTorrent(hash) {
-    await apiRequest(`/torrents/${hash}/stop`, { method: 'POST' });
+async function stopTorrent(hash, serverId) {
+    const query = serverId ? `?server_id=${serverId}` : '';
+    await apiRequest(`/torrents/${hash}/stop${query}`, { method: 'POST' });
     showToast('Torrent stopped');
     loadTorrents();
 }
 
-async function removeTorrent(hash) {
+async function removeTorrent(hash, serverId) {
     if (confirm('Are you sure? This will remove the torrent from the list.')) {
-        await apiRequest(`/torrents/${hash}`, { method: 'DELETE' });
+        const query = serverId ? `?server_id=${serverId}` : '';
+        await apiRequest(`/torrents/${hash}${query}`, { method: 'DELETE' });
         showToast('Torrent removed');
         loadTorrents();
     }
@@ -357,6 +387,172 @@ async function revokeApiKey(prefix) {
     }
 }
 
+// --- Server Management ---
+
+async function loadServers() {
+    try {
+        servers = await apiRequest('/servers');
+        updateServerSelects();
+        return servers;
+    } catch (error) {
+        servers = [];
+        return [];
+    }
+}
+
+function updateServerSelects() {
+    const targetServer = document.getElementById('targetServer');
+    if (!targetServer) return;
+
+    const currentValue = targetServer.value;
+    targetServer.innerHTML = '<option value="" disabled>Select a server...</option>';
+
+    servers.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = `${s.name} (${s.server_type})`;
+        targetServer.appendChild(opt);
+    });
+
+    if (currentValue && servers.some(s => s.id === currentValue)) {
+        targetServer.value = currentValue;
+    } else if (servers.length === 1) {
+        targetServer.value = servers[0].id;
+    }
+}
+
+async function renderServersList() {
+    const listEl = document.getElementById('serversList');
+    if (!listEl) return;
+
+    if (servers.length === 0) {
+        listEl.innerHTML = `
+            <div class="alert alert-light border text-center">
+                No servers configured. Add one above to start managing torrents.
+            </div>`;
+        return;
+    }
+
+    listEl.innerHTML = servers.map(s => `
+        <div class="card mb-2">
+            <div class="card-body py-2 d-flex justify-content-between align-items-center">
+                <div class="d-flex align-items-center gap-3">
+                    <div>
+                        <div class="fw-bold">${s.name}</div>
+                        <div class="small text-muted">
+                            <span class="badge bg-${s.server_type === 'rtorrent' ? 'primary' : 'success'} bg-opacity-75 me-1">${s.server_type}</span>
+                            ${s.host}:${s.port}
+                        </div>
+                    </div>
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-sm btn-outline-secondary" onclick="editServer('${s.id}')" title="Edit">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="testServer('${s.id}')" title="Test Connection">
+                        <i class="fas fa-plug"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteServer('${s.id}')" title="Delete">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function addServer(event) {
+    event.preventDefault();
+
+    const editingServerId = document.getElementById('editingServerId').value;
+    const data = {
+        name: document.getElementById('serverName').value,
+        server_type: document.getElementById('serverType').value,
+        host: document.getElementById('serverHost').value,
+        port: parseInt(document.getElementById('serverPort').value),
+        username: document.getElementById('serverUsername').value || null,
+        password: document.getElementById('serverPassword').value || null,
+        rpc_path: document.getElementById('serverRpcPath').value || null,
+        use_ssl: document.getElementById('serverUseSsl').checked
+    };
+
+    try {
+        if (editingServerId) {
+            // Update existing server
+            await apiRequest(`/servers/${editingServerId}`, { method: 'PUT', body: JSON.stringify(data) });
+            showToast('Server updated successfully');
+        } else {
+            // Add new server
+            await apiRequest('/servers', { method: 'POST', body: JSON.stringify(data) });
+            showToast('Server added successfully');
+        }
+
+        resetServerForm();
+        await loadServers();
+        renderServersList();
+    } catch (error) {
+        // Error handled
+    }
+}
+
+function editServer(serverId) {
+    const server = servers.find(s => s.id === serverId);
+    if (!server) return;
+
+    // Populate form fields
+    document.getElementById('editingServerId').value = server.id;
+    document.getElementById('serverName').value = server.name;
+    document.getElementById('serverType').value = server.server_type;
+    document.getElementById('serverHost').value = server.host;
+    document.getElementById('serverPort').value = server.port;
+    document.getElementById('serverUsername').value = server.username || '';
+    document.getElementById('serverPassword').value = server.password || '';
+    document.getElementById('serverRpcPath').value = server.rpc_path || '';
+    document.getElementById('serverUseSsl').checked = server.use_ssl || false;
+
+    // Update submit button
+    const submitBtn = document.getElementById('serverFormSubmitBtn');
+    submitBtn.innerHTML = '<i class="fas fa-save"></i>';
+    submitBtn.classList.remove('btn-primary');
+    submitBtn.classList.add('btn-success');
+
+    // Scroll to form
+    document.getElementById('addServerForm').scrollIntoView({ behavior: 'smooth' });
+}
+
+function resetServerForm() {
+    document.getElementById('addServerForm').reset();
+    document.getElementById('editingServerId').value = '';
+
+    // Reset submit button
+    const submitBtn = document.getElementById('serverFormSubmitBtn');
+    submitBtn.innerHTML = '<i class="fas fa-plus"></i>';
+    submitBtn.classList.remove('btn-success');
+    submitBtn.classList.add('btn-primary');
+}
+
+async function testServer(serverId) {
+    try {
+        const result = await apiRequest(`/servers/${serverId}/test`, { method: 'POST' });
+        if (result.status === 'connected') {
+            showToast(result.message, 'success');
+        } else {
+            showToast(result.message, 'danger');
+        }
+    } catch (error) {
+        // Error handled
+    }
+}
+
+async function deleteServer(serverId) {
+    if (confirm('Delete this server? Torrents will remain on the server but will no longer be tracked here.')) {
+        await apiRequest(`/servers/${serverId}`, { method: 'DELETE' });
+        showToast('Server deleted');
+        await loadServers();
+        renderServersList();
+    }
+}
+
 // --- Initialization & Event Listeners ---
 
 let pollingEnabled = true;
@@ -405,6 +601,14 @@ document.addEventListener('DOMContentLoaded', () => {
             bootstrap.Modal.getInstance(document.getElementById('addTorrentModal')).hide();
         }
     });
+
+    // Server Management
+    document.getElementById('addServerForm').addEventListener('submit', addServer);
+    document.getElementById('serversModal').addEventListener('show.bs.modal', () => {
+        resetServerForm();
+        renderServersList();
+    });
+    document.getElementById('addTorrentModal').addEventListener('show.bs.modal', updateServerSelects);
 
     // UI Toggles
     document.getElementById('refreshButton').addEventListener('click', () => loadTorrents());

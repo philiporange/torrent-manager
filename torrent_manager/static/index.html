@@ -80,6 +80,9 @@
                             <i class="fas fa-user-circle text-muted"></i> <span id="username" class="fw-bold">User</span>
                         </button>
                         <ul class="dropdown-menu dropdown-menu-end border-0 shadow">
+                            <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#serversModal">
+                                <i class="fas fa-server me-2 text-muted"></i> Servers
+                            </a></li>
                             <li><a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#apiKeysModal">
                                 <i class="fas fa-key me-2 text-muted"></i> API Keys
                             </a></li>
@@ -168,6 +171,13 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label small text-muted fw-bold">ADD TO SERVER</label>
+                        <select class="form-select" id="targetServer" required>
+                            <option value="" disabled selected>Select a server...</option>
+                        </select>
+                    </div>
+
                     <ul class="nav nav-tabs nav-fill mb-3" role="tablist">
                         <li class="nav-item">
                             <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#magnetPane">Magnet</button>
@@ -223,6 +233,63 @@
                         </div>
                     </form>
                     <div id="apiKeysList" class="small"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Servers Modal -->
+    <div class="modal fade" id="serversModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+            <div class="modal-content border-0 shadow">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold">Torrent Servers</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="addServerForm" class="mb-4">
+                        <input type="hidden" id="editingServerId" value="">
+                        <div class="row g-2">
+                            <div class="col-md-4">
+                                <input type="text" class="form-control" id="serverName" placeholder="Server Name" required>
+                            </div>
+                            <div class="col-md-2">
+                                <select class="form-select" id="serverType" required>
+                                    <option value="rtorrent">rTorrent</option>
+                                    <option value="transmission">Transmission</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <input type="text" class="form-control" id="serverHost" placeholder="Host" required>
+                            </div>
+                            <div class="col-md-2">
+                                <input type="number" class="form-control" id="serverPort" placeholder="Port" required>
+                            </div>
+                            <div class="col-md-1">
+                                <button type="submit" id="serverFormSubmitBtn" class="btn btn-primary w-100">
+                                    <i class="fas fa-plus"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="row g-2 mt-2">
+                            <div class="col-md-3">
+                                <input type="text" class="form-control" id="serverUsername" placeholder="Username (optional)">
+                            </div>
+                            <div class="col-md-3">
+                                <input type="password" class="form-control" id="serverPassword" placeholder="Password (optional)">
+                            </div>
+                            <div class="col-md-4">
+                                <input type="text" class="form-control" id="serverRpcPath" placeholder="RPC Path (optional)">
+                            </div>
+                            <div class="col-md-2">
+                                <div class="form-check mt-2">
+                                    <input class="form-check-input" type="checkbox" id="serverUseSsl">
+                                    <label class="form-check-label small" for="serverUseSsl">Use SSL</label>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="serversList"></div>
                 </div>
             </div>
         </div>

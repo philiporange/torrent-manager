@@ -5,7 +5,7 @@ from torrent_manager.manager import Manager
 
 @pytest.fixture(scope="function")
 def manager(rtorrent_client):
-    return Manager(rtorrent=rtorrent_client)
+    return Manager(client=rtorrent_client)
 
 @pytest.mark.usefixtures("docker_rtorrent", "rtorrent_client")
 class TestManager:

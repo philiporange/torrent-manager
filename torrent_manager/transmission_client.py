@@ -1,11 +1,19 @@
+"""
+Transmission RPC client for managing torrents.
+
+Provides the TransmissionClient class for interacting with Transmission via RPC,
+implementing the same interface as RTorrentClient for interchangeable use.
+"""
+
 import os
 import tempfile
-from typing import Any, Dict, Generator, List
+from typing import Any, Dict, Generator, List, Optional
 
 import requests
 from transmission_rpc import Client as TransmissionRPCClient
 from transmission_rpc.torrent import Torrent as TransmissionTorrent
-        
+
+from .base_client import BaseTorrentClient
 from .config import Config
 from .logger import logger
 from .torrent_file import TorrentFile
@@ -18,25 +26,41 @@ TRANSMISSION_USERNAME = Config.TRANSMISSION_USERNAME
 TRANSMISSION_PASSWORD = Config.TRANSMISSION_PASSWORD
 
 
-class TransmissionClient:
-    def __init__(self, host=TRANSMISSION_HOST, port=TRANSMISSION_PORT, username=TRANSMISSION_USERNAME, password=TRANSMISSION_PASSWORD):
-        self.client = TransmissionRPCClient(host=host, port=port, username=username, password=password)
+class TransmissionClient(BaseTorrentClient):
+    def __init__(
+        self,
+        protocol: str = "http",
+        host: str = TRANSMISSION_HOST,
+        port: int = TRANSMISSION_PORT,
+        path: str = "/transmission/rpc",
+        username: Optional[str] = TRANSMISSION_USERNAME,
+        password: Optional[str] = TRANSMISSION_PASSWORD
+    ):
+        self.host = host
+        self.port = port
+        self.client = TransmissionRPCClient(
+            protocol=protocol,
+            host=host,
+            port=port,
+            path=path,
+            username=username or None,
+            password=password or None
+        )
 
     def _get_torrent_by_hash(self, info_hash: str) -> TransmissionTorrent:
         torrents = self.client.get_torrents()
         for torrent in torrents:
-            if torrent.hashString == info_hash:
+            if torrent.hashString.lower() == info_hash.lower():
                 return torrent
         raise ValueError(f"No torrent found with hash {info_hash}")
 
-    def check_methods(self):
-        # Transmission RPC doesn't have a direct equivalent to rTorrent's system.listMethods
-        # We'll assume all methods are available if we can connect successfully
+    def check_connection(self) -> bool:
+        """Test if the connection to Transmission is working."""
         try:
             self.client.session_stats()
             return True
         except Exception as e:
-            logger.error(f"Failed to connect to Transmission: {e}")
+            logger.error(f"Failed to connect to Transmission at {self.host}:{self.port}: {e}")
             return False
 
     def add_torrent(self, path, start=True, priority=1):

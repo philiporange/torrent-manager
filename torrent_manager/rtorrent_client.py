@@ -10,11 +10,12 @@ invalid or malformed torrent files.
 import os
 import tempfile
 import time
-from typing import Any, Dict, Generator, List
+from typing import Any, Dict, Generator, List, Optional
 from xmlrpc import client
 
 import requests
 
+from .base_client import BaseTorrentClient
 from .config import Config
 from .logger import logger
 from .torrent_file import TorrentFile, TorrentFileError, InvalidTorrentFileError, MissingRequiredKeyError
@@ -24,14 +25,23 @@ from .magnet_link import MagnetLink
 RTORRENT_RPC_URL = Config.RTORRENT_RPC_URL
 
 
-class RTorrentClient:
-    def __init__(self, url=RTORRENT_RPC_URL, view="main"):
+class RTorrentClient(BaseTorrentClient):
+    def __init__(self, url: str = RTORRENT_RPC_URL, view: str = "main"):
         self.url = url
         self.client = client.ServerProxy(url)
         self.view = view
 
     def __getattr__(self, name):
         return getattr(self.client, name)
+
+    def check_connection(self) -> bool:
+        """Test if the connection to rTorrent is working."""
+        try:
+            self.client.system.client_version()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to rTorrent at {self.url}: {e}")
+            return False
 
     def check_methods(self):
         methods = self.client.system.listMethods()

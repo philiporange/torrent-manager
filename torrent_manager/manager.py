@@ -17,10 +17,10 @@ MAX_INTERVAL = Config.MAX_INTERVAL
 class Manager:
     def __init__(
             self,
-            client=Client(),
+            client=None,
             activity_log=None,
         ):
-        self.client = client
+        self.client = client or RTorrentClient()
         self.activity = activity_log or Activity()
 
     def add_torrent(self, path):
@@ -28,7 +28,11 @@ class Manager:
 
     def list_torrents(self):
         return self.client.list_torrents()
-    
+
+    def get_torrents(self):
+        """Alias for list_torrents for backwards compatibility."""
+        return [t['info_hash'] for t in self.client.list_torrents()]
+
     def get_seeding_torrents(self):
         return [t for t in self.get_torrents() if self.rtorrent.d.is_active(t) == 1 and self.rtorrent.d.complete(t) == 1]
     
