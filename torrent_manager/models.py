@@ -2,7 +2,8 @@
 Database models for the torrent manager application.
 
 Includes models for user authentication (User, Session, RememberMeToken, ApiKey),
-torrent server configuration (TorrentServer), and torrent tracking (Torrent, Status, Action).
+torrent server configuration (TorrentServer with HTTP download support),
+and torrent tracking (Torrent, Status, Action).
 """
 
 import datetime
@@ -27,6 +28,10 @@ class TorrentServer(BaseModel):
     """
     Configuration for a remote torrent server (rTorrent or Transmission).
     Each user can have multiple servers configured.
+
+    HTTP download fields (http_*) configure access to an nginx server serving
+    the torrent downloads directory, enabling file browsing and download through
+    the API proxy.
     """
     id = CharField(primary_key=True)
     user_id = CharField(index=True)
@@ -40,6 +45,13 @@ class TorrentServer(BaseModel):
     use_ssl = BooleanField(default=False)  # Use HTTPS instead of HTTP
     enabled = BooleanField(default=True)
     created_at = DateTimeField(default=datetime.datetime.now)
+    # HTTP download server configuration (nginx autoindex)
+    http_host = CharField(null=True)  # HTTP server host (defaults to main host if not set)
+    http_port = IntegerField(null=True)  # HTTP server port
+    http_path = CharField(null=True)  # Base path on the HTTP server (e.g., "/downloads/")
+    http_username = CharField(null=True)  # HTTP Basic Auth username
+    http_password = CharField(null=True)  # HTTP Basic Auth password
+    http_use_ssl = BooleanField(default=False)  # Use HTTPS for HTTP downloads
 
 class Session(BaseModel):
     """

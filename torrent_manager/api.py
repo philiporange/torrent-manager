@@ -6,6 +6,7 @@ Provides:
 - API key authentication for programmatic access
 - Multi-server torrent management (rTorrent and Transmission)
 - Full torrent management (add, start, stop, remove, list)
+- File browsing and download proxy for nginx HTTP servers
 - CORS middleware for frontend access
 """
 
@@ -73,6 +74,13 @@ class AddServerRequest(BaseModel):
     password: Optional[str] = None
     rpc_path: Optional[str] = None  # For rTorrent (e.g., "/RPC2")
     use_ssl: bool = False
+    # HTTP download server configuration
+    http_host: Optional[str] = None
+    http_port: Optional[int] = None
+    http_path: Optional[str] = None
+    http_username: Optional[str] = None
+    http_password: Optional[str] = None
+    http_use_ssl: bool = False
 
 
 class UpdateServerRequest(BaseModel):
@@ -84,6 +92,13 @@ class UpdateServerRequest(BaseModel):
     rpc_path: Optional[str] = None
     use_ssl: Optional[bool] = None
     enabled: Optional[bool] = None
+    # HTTP download server configuration
+    http_host: Optional[str] = None
+    http_port: Optional[int] = None
+    http_path: Optional[str] = None
+    http_username: Optional[str] = None
+    http_password: Optional[str] = None
+    http_use_ssl: Optional[bool] = None
 
 
 class CreateUserRequest(BaseModel):
@@ -647,7 +662,13 @@ async def add_server(request: AddServerRequest, user: User = Depends(get_current
         password=request.password,
         rpc_path=request.rpc_path,
         use_ssl=request.use_ssl,
-        enabled=True
+        enabled=True,
+        http_host=request.http_host,
+        http_port=request.http_port,
+        http_path=request.http_path,
+        http_username=request.http_username,
+        http_password=request.http_password,
+        http_use_ssl=request.http_use_ssl
     )
 
     return {
@@ -662,7 +683,13 @@ async def add_server(request: AddServerRequest, user: User = Depends(get_current
         "rpc_path": server.rpc_path,
         "use_ssl": server.use_ssl,
         "enabled": server.enabled,
-        "created_at": server.created_at.isoformat()
+        "created_at": server.created_at.isoformat(),
+        "http_host": server.http_host,
+        "http_port": server.http_port,
+        "http_path": server.http_path,
+        "http_username": server.http_username,
+        "http_use_ssl": server.http_use_ssl,
+        "http_enabled": bool(server.http_port)
     }
 
 
@@ -680,7 +707,13 @@ async def list_servers(user: User = Depends(get_current_user)):
             "rpc_path": s.rpc_path,
             "use_ssl": s.use_ssl,
             "enabled": s.enabled,
-            "created_at": s.created_at.isoformat()
+            "created_at": s.created_at.isoformat(),
+            "http_host": s.http_host,
+            "http_port": s.http_port,
+            "http_path": s.http_path,
+            "http_username": s.http_username,
+            "http_use_ssl": s.http_use_ssl,
+            "http_enabled": bool(s.http_port)
         }
         for s in servers
     ]
@@ -700,7 +733,13 @@ async def get_server(server_id: str, user: User = Depends(get_current_user)):
         "rpc_path": server.rpc_path,
         "use_ssl": server.use_ssl,
         "enabled": server.enabled,
-        "created_at": server.created_at.isoformat()
+        "created_at": server.created_at.isoformat(),
+        "http_host": server.http_host,
+        "http_port": server.http_port,
+        "http_path": server.http_path,
+        "http_username": server.http_username,
+        "http_use_ssl": server.http_use_ssl,
+        "http_enabled": bool(server.http_port)
     }
 
 
@@ -729,6 +768,18 @@ async def update_server(
         server.use_ssl = request.use_ssl
     if request.enabled is not None:
         server.enabled = request.enabled
+    if request.http_host is not None:
+        server.http_host = request.http_host
+    if request.http_port is not None:
+        server.http_port = request.http_port
+    if request.http_path is not None:
+        server.http_path = request.http_path
+    if request.http_username is not None:
+        server.http_username = request.http_username
+    if request.http_password is not None:
+        server.http_password = request.http_password
+    if request.http_use_ssl is not None:
+        server.http_use_ssl = request.http_use_ssl
 
     server.save()
 
@@ -744,7 +795,13 @@ async def update_server(
         "rpc_path": server.rpc_path,
         "use_ssl": server.use_ssl,
         "enabled": server.enabled,
-        "created_at": server.created_at.isoformat()
+        "created_at": server.created_at.isoformat(),
+        "http_host": server.http_host,
+        "http_port": server.http_port,
+        "http_path": server.http_path,
+        "http_username": server.http_username,
+        "http_use_ssl": server.http_use_ssl,
+        "http_enabled": bool(server.http_port)
     }
 
 
@@ -1142,6 +1199,199 @@ async def delete_torrent(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to remove torrent: {str(e)}"
         )
+
+
+# File Download Proxy Endpoints
+from .nginx_http import HttpNginxDirectoryClient
+from fastapi.responses import StreamingResponse
+import posixpath
+
+
+def get_http_client(server: TorrentServer) -> HttpNginxDirectoryClient:
+    """Create an HTTP client for browsing and downloading files from the server."""
+    if not server.http_port:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="HTTP downloads not configured for this server"
+        )
+
+    host = server.http_host or server.host
+    scheme = "https" if server.http_use_ssl else "http"
+    path = server.http_path or "/"
+    if not path.startswith("/"):
+        path = "/" + path
+    if not path.endswith("/"):
+        path = path + "/"
+
+    base_url = f"{scheme}://{host}:{server.http_port}{path}"
+
+    auth = None
+    if server.http_username and server.http_password:
+        auth = (server.http_username, server.http_password)
+
+    return HttpNginxDirectoryClient(base_url=base_url, auth=auth)
+
+
+@app.get("/servers/{server_id}/files")
+async def list_server_files(
+    server_id: str,
+    path: str = Query("", description="Path relative to base directory"),
+    user: User = Depends(get_current_user)
+):
+    """
+    List files and directories at the server's HTTP download location.
+
+    Requires the server to have HTTP download configuration (http_port set).
+    The path is relative to the server's http_path base directory.
+    """
+    server = get_user_server(server_id, user)
+    client = get_http_client(server)
+
+    try:
+        entries = client.listdir(path)
+        return {
+            "server_id": server_id,
+            "server_name": server.name,
+            "path": path,
+            "entries": [
+                {
+                    "name": e.name,
+                    "path": e.path,
+                    "is_dir": e.is_dir,
+                    "size": e.size,
+                    "modified": e.modified.isoformat() if e.modified else None,
+                    "raw_size": e.raw_size
+                }
+                for e in entries
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Failed to list files: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to list files: {str(e)}"
+        )
+
+
+@app.get("/servers/{server_id}/download/{file_path:path}")
+async def download_file(
+    server_id: str,
+    file_path: str,
+    user: User = Depends(get_current_user)
+):
+    """
+    Proxy download a file from the server's HTTP download location.
+
+    This endpoint streams the file through the API server, acting as a proxy
+    so that end users don't need the server's HTTP credentials.
+    """
+    server = get_user_server(server_id, user)
+    client = get_http_client(server)
+
+    # Get the filename for Content-Disposition header
+    filename = posixpath.basename(file_path)
+    if not filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file path"
+        )
+
+    try:
+        # Build the URL for the file
+        url = client._build_url(file_path, is_dir=False)
+
+        # Stream the response
+        response = client._session_get(url, stream=True, timeout=client.timeout)
+        response.raise_for_status()
+
+        # Get content type and length from upstream
+        content_type = response.headers.get("Content-Type", "application/octet-stream")
+        content_length = response.headers.get("Content-Length")
+
+        def generate():
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    yield chunk
+
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+        if content_length:
+            headers["Content-Length"] = content_length
+
+        return StreamingResponse(
+            generate(),
+            media_type=content_type,
+            headers=headers
+        )
+    except Exception as e:
+        logger.error(f"Failed to download file: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to download file: {str(e)}"
+        )
+
+
+@app.get("/torrents/{info_hash}/files")
+async def list_torrent_files(
+    info_hash: str,
+    server_id: Optional[str] = Query(None, description="Server ID"),
+    user: User = Depends(get_current_user)
+):
+    """
+    List all files belonging to a specific torrent.
+
+    Returns the files from the torrent client along with download URLs
+    if HTTP downloads are configured for the server.
+    """
+    if server_id:
+        server = get_user_server(server_id, user)
+        client = get_client(server)
+        torrent = next(client.list_torrents(info_hash=info_hash, files=True), None)
+    else:
+        server, client, torrent = find_torrent_server(info_hash, user)
+
+    if not torrent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Torrent not found"
+        )
+
+    # Get file list from torrent
+    files = torrent.get("files", [])
+    torrent_name = torrent.get("name", "")
+    torrent_path = torrent.get("path", "")
+
+    # Check if HTTP downloads are available
+    http_enabled = bool(server.http_port) if server else False
+
+    result_files = []
+    for f in files:
+        file_info = {
+            "path": f.get("path", ""),
+            "size": f.get("size", 0),
+            "progress": f.get("progress", 0),
+            "priority": f.get("priority", 1)
+        }
+
+        # Add download URL if HTTP is configured
+        if http_enabled:
+            # Construct the relative path for downloading
+            # Usually files are in torrent_name/file_path
+            rel_path = f.get("path", "")
+            file_info["download_url"] = f"/servers/{server.id}/download/{rel_path}"
+
+        result_files.append(file_info)
+
+    return {
+        "info_hash": info_hash,
+        "name": torrent_name,
+        "path": torrent_path,
+        "server_id": server.id if server else None,
+        "server_name": server.name if server else None,
+        "http_enabled": http_enabled,
+        "files": result_files
+    }
 
 
 # Cleanup tasks (could be run periodically with a background task)

@@ -90,6 +90,48 @@
                             <label for="use_ssl" class="ml-2 block text-sm text-slate-900">Use SSL (HTTPS)</label>
                         </div>
 
+                        <!-- HTTP Download Configuration -->
+                        <div class="border-t border-slate-200 pt-4 mt-4">
+                            <h4 class="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
+                                <i class="fas fa-download text-slate-400"></i>
+                                HTTP Downloads <span class="text-slate-400 text-xs">(optional)</span>
+                            </h4>
+
+                            <div class="space-y-4">
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-slate-700">HTTP Host <span class="text-slate-400 text-xs">(opt)</span></label>
+                                        <input type="text" name="http_host" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border" placeholder="Same as main host">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-slate-700">HTTP Port</label>
+                                        <input type="number" name="http_port" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border" placeholder="80">
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700">HTTP Path <span class="text-slate-400 text-xs">(e.g., /downloads/)</span></label>
+                                    <input type="text" name="http_path" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border" placeholder="/">
+                                </div>
+
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-slate-700">HTTP Username <span class="text-slate-400 text-xs">(opt)</span></label>
+                                        <input type="text" name="http_username" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-slate-700">HTTP Password <span class="text-slate-400 text-xs">(opt)</span></label>
+                                        <input type="password" name="http_password" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border">
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center">
+                                    <input id="http_use_ssl" name="http_use_ssl" type="checkbox" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-slate-300 rounded">
+                                    <label for="http_use_ssl" class="ml-2 block text-sm text-slate-900">Use SSL for HTTP Downloads</label>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="pt-2 flex gap-3">
                             <button type="submit" class="flex-1 flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
                                 <i class="fas fa-plus mr-2 mt-0.5"></i> <span id="submitBtnText">Add Server</span>
@@ -99,6 +141,42 @@
                             </button>
                         </div>
                     </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- File Browser Modal -->
+    <div id="fileBrowserModal" class="fixed inset-0 z-50 overflow-y-auto hidden" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 bg-slate-500 bg-opacity-75 transition-opacity" aria-hidden="true" onclick="closeFileBrowser()"></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+
+            <div class="relative inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-3xl sm:w-full sm:p-6">
+                <div class="absolute top-0 right-0 pt-4 pr-4">
+                    <button type="button" onclick="closeFileBrowser()" class="bg-white rounded-md text-slate-400 hover:text-slate-500 focus:outline-none">
+                        <span class="sr-only">Close</span>
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <div>
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="p-2 rounded-lg bg-emerald-50 text-emerald-600">
+                            <i class="fas fa-folder-open text-xl"></i>
+                        </div>
+                        <h3 class="text-lg leading-6 font-medium text-slate-900">File Browser</h3>
+                    </div>
+
+                    <!-- Breadcrumb -->
+                    <div id="fileBreadcrumb" class="text-sm text-slate-600 mb-4 pb-3 border-b border-slate-200">
+                        <span class="cursor-pointer text-indigo-600 hover:underline" onclick="loadFiles('')">Root</span>
+                    </div>
+
+                    <!-- Files List -->
+                    <div id="filesList" class="max-h-96 overflow-y-auto divide-y divide-slate-100">
+                        <div class="text-center py-8"><i class="fas fa-circle-notch fa-spin text-indigo-500 text-2xl"></i></div>
+                    </div>
                 </div>
             </div>
         </div>

@@ -40,6 +40,21 @@ function updateGlobalStats(stats, count) {
     document.getElementById('stat-active').textContent = stats.active;
 }
 
+// Track which servers have HTTP enabled
+let serverHttpStatus = {};
+
+async function loadServerHttpStatus() {
+    try {
+        const serversList = await apiRequest('/servers');
+        serverHttpStatus = {};
+        for (const s of serversList) {
+            serverHttpStatus[s.id] = s.http_enabled;
+        }
+    } catch (e) {
+        // Ignore
+    }
+}
+
 function renderTorrentList(torrents, container) {
     if (torrents.length === 0) {
         container.innerHTML = `
@@ -60,6 +75,7 @@ function renderTorrentList(torrents, container) {
         const isFinished = t.complete || t.state === 'finished';
         const statusColor = isFinished ? 'text-emerald-600 bg-emerald-50' : 'text-indigo-600 bg-indigo-50';
         const barColor = isFinished ? 'bg-emerald-500' : 'bg-indigo-500';
+        const httpEnabled = serverHttpStatus[t.server_id] || false;
 
         return `
         <div class="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition-shadow duration-200">
@@ -79,8 +95,13 @@ function renderTorrentList(torrents, container) {
                         </span>
                     </div>
                 </div>
-                
+
                 <div class="flex items-center gap-2">
+                    ${httpEnabled ? `
+                        <button onclick="viewTorrentFiles('${t.info_hash}', '${t.server_id}')" class="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="View Files">
+                            <i class="fas fa-folder-open"></i>
+                        </button>
+                    ` : ''}
                     ${t.is_active ? `
                         <button onclick="stopTorrent('${t.info_hash}', '${t.server_id}')" class="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Pause">
                             <i class="fas fa-pause"></i>
@@ -213,12 +234,69 @@ function closeModal(id) {
     document.getElementById(id).classList.add('hidden');
 }
 
+// Torrent Files Modal
+let currentTorrentInfo = null;
+
+async function viewTorrentFiles(infoHash, serverId) {
+    currentTorrentInfo = { infoHash, serverId };
+    document.getElementById('torrentFilesModal').classList.remove('hidden');
+    document.getElementById('torrentFilesList').innerHTML = `<div class="text-center py-8"><i class="fas fa-circle-notch fa-spin text-indigo-500 text-2xl"></i></div>`;
+
+    try {
+        const data = await apiRequest(`/torrents/${infoHash}/files?server_id=${serverId}`);
+        document.getElementById('torrentFilesTitle').textContent = data.name || infoHash;
+        renderTorrentFilesList(data);
+    } catch (error) {
+        document.getElementById('torrentFilesList').innerHTML = `<div class="text-center py-8 text-rose-500">Failed to load files</div>`;
+    }
+}
+
+function closeTorrentFilesModal() {
+    document.getElementById('torrentFilesModal').classList.add('hidden');
+}
+
+function renderTorrentFilesList(data) {
+    const container = document.getElementById('torrentFilesList');
+    const files = data.files || [];
+
+    if (files.length === 0) {
+        container.innerHTML = `<div class="text-center py-8 text-slate-500">No files found</div>`;
+        return;
+    }
+
+    container.innerHTML = files.map(f => {
+        const progress = ((f.progress || 0) * 100).toFixed(1);
+        const size = formatBytes(f.size || 0);
+        const filename = f.path.split('/').pop() || f.path;
+
+        return `
+            <div class="flex items-center gap-3 p-3 hover:bg-slate-50 rounded-lg transition-colors">
+                <i class="fas fa-file text-slate-400 text-lg"></i>
+                <div class="flex-1 min-w-0">
+                    <div class="truncate text-sm font-medium text-slate-900" title="${f.path}">${filename}</div>
+                    <div class="text-xs text-slate-500">${f.path}</div>
+                </div>
+                <div class="text-sm text-slate-500">${size}</div>
+                <div class="text-sm text-slate-500">${progress}%</div>
+                ${data.http_enabled && f.download_url ? `
+                    <a href="${API_BASE}${f.download_url}"
+                       class="px-3 py-1.5 text-sm font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors"
+                       download>
+                        <i class="fas fa-download"></i>
+                    </a>
+                ` : ''}
+            </div>
+        `;
+    }).join('');
+}
+
 // Initialization
 document.addEventListener('DOMContentLoaded', async () => {
     injectNavbar('Torrents');
-    
+
     const user = await checkAuth();
     if (user) {
+        await loadServerHttpStatus();
         loadTorrents();
         setInterval(() => {
             if (pollingEnabled && !document.hidden) loadTorrents();

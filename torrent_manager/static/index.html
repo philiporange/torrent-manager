@@ -188,6 +188,37 @@
         </div>
     </div>
 
+    <!-- Torrent Files Modal -->
+    <div id="torrentFilesModal" class="fixed inset-0 z-50 overflow-y-auto hidden" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 bg-slate-500 bg-opacity-75 transition-opacity" aria-hidden="true" onclick="closeTorrentFilesModal()"></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+
+            <div class="relative inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-3xl sm:w-full sm:p-6">
+                <div class="absolute top-0 right-0 pt-4 pr-4">
+                    <button type="button" onclick="closeTorrentFilesModal()" class="bg-white rounded-md text-slate-400 hover:text-slate-500 focus:outline-none">
+                        <span class="sr-only">Close</span>
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <div>
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="p-2 rounded-lg bg-emerald-50 text-emerald-600">
+                            <i class="fas fa-folder-open text-xl"></i>
+                        </div>
+                        <h3 id="torrentFilesTitle" class="text-lg leading-6 font-medium text-slate-900 truncate">Torrent Files</h3>
+                    </div>
+
+                    <!-- Files List -->
+                    <div id="torrentFilesList" class="max-h-96 overflow-y-auto divide-y divide-slate-100">
+                        <div class="text-center py-8"><i class="fas fa-circle-notch fa-spin text-indigo-500 text-2xl"></i></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="/config.js"></script>
     <script src="/static/js/common.js"></script>
     <script src="/static/js/dashboard.js"></script>
