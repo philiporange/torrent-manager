@@ -16,6 +16,7 @@ from typing import Optional, List
 from fastapi import FastAPI, Request, Response, HTTPException, Depends, status, Form, UploadFile, File, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
+from starlette.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import asyncio
@@ -1301,7 +1302,13 @@ async def download_file(
         url = client._build_url(file_path, is_dir=False)
 
         # Stream the response
-        response = client._session_get(url, stream=True, timeout=client.timeout)
+        # Run blocking request in threadpool to avoid blocking event loop
+        response = await run_in_threadpool(
+            client._session_get, 
+            url, 
+            stream=True, 
+            timeout=client.timeout
+        )
         response.raise_for_status()
 
         # Get content type and length from upstream
@@ -1309,9 +1316,12 @@ async def download_file(
         content_length = response.headers.get("Content-Length")
 
         def generate():
-            for chunk in response.iter_content(chunk_size=64 * 1024):
-                if chunk:
-                    yield chunk
+            try:
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if chunk:
+                        yield chunk
+            finally:
+                response.close()
 
         headers = {
             "Content-Disposition": f'attachment; filename="{filename}"'
