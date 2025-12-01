@@ -1,0 +1,2 @@
+SESSION_COOKIE_NAME = "session"
+REMEMBER_ME_COOKIE_NAME = "remember_me"
