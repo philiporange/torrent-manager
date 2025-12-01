@@ -208,6 +208,7 @@ class RTorrentClient(BaseTorrentClient):
             "download_rate",
             "peers",
             "priority",
+            "is_private",
         ]
         data = self.client.d.multicall2(info_hash, self.view,
             "d.hash=",
@@ -225,6 +226,7 @@ class RTorrentClient(BaseTorrentClient):
             "d.down.rate=",
             "d.peers_connected=",
             "d.priority=",
+            "d.is_private=",
         )
 
         # Convert data to dictionary
@@ -239,6 +241,7 @@ class RTorrentClient(BaseTorrentClient):
             item["is_multi_file"] = item["is_multi_file"] == 1
             item["is_active"] = item["is_active"] == 1
             item["complete"] = item["complete"] == 1
+            item["is_private"] = item["is_private"] == 1
             
             info_hash = item["info_hash"]
             name = item["name"]

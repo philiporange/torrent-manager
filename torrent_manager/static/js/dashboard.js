@@ -90,6 +90,11 @@ function renderTorrentList(torrents, container) {
                         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium ${statusColor}">
                             ${t.state || 'unknown'}
                         </span>
+                        ${t.is_private ? `
+                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium text-amber-600 bg-amber-50 border border-amber-200">
+                            <i class="fas fa-lock mr-1"></i> Private
+                        </span>
+                        ` : ''}
                         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium text-slate-600 bg-slate-100 border border-slate-200">
                             <i class="fas fa-server mr-1 text-slate-400"></i> ${t.server_name}
                         </span>
@@ -195,7 +200,7 @@ async function addMagnet(event) {
     if (!uri) return;
 
     await apiRequest('/torrents', { method: 'POST', body: JSON.stringify({ uri, server_id }) });
-    showToast('Magnet added successfully');
+    showToast('Torrent added successfully');
     document.getElementById('addModal').close(); // Helper function needed for modal closing
     loadTorrents();
 }
@@ -311,7 +316,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!server_id) { showToast('Select a server', 'danger'); return; }
         
         await apiRequest('/torrents', { method: 'POST', body: JSON.stringify({ uri, server_id }) });
-        showToast('Magnet added');
+        showToast('Torrent added');
         closeModal('addModal');
         document.getElementById('magnetInput').value = '';
         loadTorrents();

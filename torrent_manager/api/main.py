@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from torrent_manager.config import Config
 from torrent_manager.logger import logger
 from torrent_manager.auth import SessionManager, ApiKeyManager
+from torrent_manager.trackers import fetch_trackers
 
 from .routes import auth, servers, torrents, admin, pages
 from .routes.auth import set_session_cookie
@@ -75,11 +76,14 @@ app.include_router(pages.router)
 # Cleanup tasks (could be run periodically with a background task)
 @app.on_event("startup")
 async def startup_event():
-    """Run cleanup on startup."""
+    """Run cleanup and initialization on startup."""
     logger.info("Starting Torrent Manager API")
     SessionManager.cleanup_expired_sessions()
     SessionManager.cleanup_expired_tokens()
     ApiKeyManager.cleanup_expired_keys()
+
+    # Fetch and cache public tracker list
+    await fetch_trackers()
 
 
 if __name__ == "__main__":

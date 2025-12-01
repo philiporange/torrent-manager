@@ -106,6 +106,7 @@ class Torrent(BaseModel):
     path = CharField()
     files = CharField()
     size = IntegerField()
+    is_private = BooleanField(default=False)
     timestamp = DateTimeField(default=datetime.datetime.now)
 
 

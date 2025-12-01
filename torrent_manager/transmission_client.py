@@ -159,6 +159,7 @@ class TransmissionClient(BaseTorrentClient):
                 "priority": self._get_torrent_priority(torrent),
                 "progress": torrent.progress / 100,
                 "is_magnet": torrent.magnet_link is not None,
+                "is_private": getattr(torrent, 'is_private', False),
             }
 
             if files:

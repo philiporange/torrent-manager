@@ -37,6 +37,10 @@ REDISLITE_DB_PATH = tempfile.NamedTemporaryFile().name
 
 CONTAINER_NAME = "rtorrent-manager"
 
+# Tracker augmentation for public torrents
+TRACKERS_LIST_URL = "https://raw.githubusercontent.com/ngosang/trackerslist/refs/heads/master/trackers_best.txt"
+AUGMENT_TRACKERS = True
+
 
 class Config:
     DEBUG = os.getenv("DEBUG", DEBUG)
@@ -80,6 +84,10 @@ class Config:
     # Security Configuration
     # Default to False for local HTTP development. Set COOKIE_SECURE=true in production with HTTPS.
     COOKIE_SECURE = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+
+    # Tracker augmentation for public torrents
+    TRACKERS_LIST_URL = os.getenv("TRACKERS_LIST_URL", TRACKERS_LIST_URL)
+    AUGMENT_TRACKERS = os.getenv("AUGMENT_TRACKERS", str(AUGMENT_TRACKERS)).lower() == "true"
 
     @property
     def API_BASE_URL(self):

@@ -1,14 +1,32 @@
 import os
+import re
 import tempfile
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from torrent_manager.models import TorrentServer, User
 from torrent_manager.client_factory import get_client
 from torrent_manager.logger import logger
+from torrent_manager.magnet_link import MagnetLink
+from torrent_manager.torrent_file import TorrentFile
+from torrent_manager.trackers import get_cached_trackers, is_augmentation_enabled
 from ..schemas import AddTorrentRequest, TorrentActionRequest
 from ..dependencies import get_current_user, get_user_server, find_torrent_server
 
 router = APIRouter(tags=["torrents"])
+
+# Regex patterns for info hash detection
+INFO_HASH_HEX_PATTERN = re.compile(r'^[a-fA-F0-9]{40}$')
+INFO_HASH_BASE32_PATTERN = re.compile(r'^[A-Za-z2-7]{32}$')
+
+
+def is_info_hash(value: str) -> bool:
+    """Check if a string is a valid info hash (40 hex chars or 32 base32 chars)."""
+    return bool(INFO_HASH_HEX_PATTERN.match(value) or INFO_HASH_BASE32_PATTERN.match(value))
+
+
+def info_hash_to_magnet(info_hash: str) -> str:
+    """Convert an info hash to a magnet URI."""
+    return f"magnet:?xt=urn:btih:{info_hash.upper()}"
 
 @router.get("/torrents")
 async def list_torrents(
@@ -56,14 +74,40 @@ async def list_torrents(
     return all_torrents
 
 
+def augment_magnet_with_trackers(magnet_uri: str) -> str:
+    """
+    Augment a magnet URI with cached public trackers.
+
+    Magnet links are always considered public (no private flag),
+    so trackers are added if augmentation is enabled.
+    """
+    if not is_augmentation_enabled():
+        return magnet_uri
+
+    try:
+        magnet = MagnetLink(magnet_uri)
+        for tracker in get_cached_trackers():
+            magnet.add_tracker(tracker)
+        augmented = magnet.to_uri()
+        logger.debug(f"Augmented magnet with {len(get_cached_trackers())} trackers")
+        return augmented
+    except Exception as e:
+        logger.warning(f"Failed to augment magnet URI: {e}")
+        return magnet_uri
+
+
 @router.post("/torrents")
 async def add_torrent(request: AddTorrentRequest, user: User = Depends(get_current_user)):
     """
-    Add a torrent by magnet URI or HTTP/HTTPS URL to a specific server.
+    Add a torrent by info hash, magnet URI, or HTTP/HTTPS URL to a specific server.
 
     Supports:
+    - Info hashes (40 hex chars or 32 base32 chars)
     - Magnet URIs (magnet:?xt=urn:btih:...)
     - HTTP/HTTPS URLs to .torrent files
+
+    Public torrents (magnets, info hashes, or non-private .torrent files) are
+    augmented with additional public trackers to speed up peer discovery.
     """
     server = get_user_server(request.server_id, user)
 
@@ -71,14 +115,20 @@ async def add_torrent(request: AddTorrentRequest, user: User = Depends(get_curre
         client = get_client(server)
         uri = request.uri.strip()
 
+        # Convert info hash to magnet URI
+        if is_info_hash(uri):
+            uri = info_hash_to_magnet(uri)
+            logger.info(f"Converted info hash to magnet URI")
+
         if uri.startswith("magnet:"):
+            uri = augment_magnet_with_trackers(uri)
             result = client.add_magnet(uri, start=request.start)
         elif uri.startswith("http://") or uri.startswith("https://"):
             result = client.add_torrent_url(uri, start=request.start)
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="URI must be a magnet link or HTTP/HTTPS URL"
+                detail="Input must be an info hash, magnet link, or HTTP/HTTPS URL"
             )
 
         if result:
@@ -118,6 +168,9 @@ async def upload_torrent(
 ):
     """
     Upload a .torrent file directly to a specific server.
+
+    Public torrents (non-private) are augmented with additional public
+    trackers to speed up peer discovery.
     """
     server = get_user_server(server_id, user)
     tmp_path = None
@@ -134,6 +187,18 @@ async def upload_torrent(
             tmp.write(content)
             tmp.flush()
             tmp_path = tmp.name
+
+        # Augment public torrents with additional trackers
+        if is_augmentation_enabled():
+            try:
+                torrent = TorrentFile(tmp_path)
+                if not torrent.is_private:
+                    trackers = get_cached_trackers()
+                    torrent.add_trackers(trackers)
+                    torrent.save(tmp_path)
+                    logger.debug(f"Augmented torrent with {len(trackers)} trackers")
+            except Exception as e:
+                logger.warning(f"Failed to augment torrent file: {e}")
 
         client = get_client(server)
         result = client.add_torrent(tmp_path, start=start)

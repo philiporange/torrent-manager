@@ -2,7 +2,15 @@
 Torrent file parser with comprehensive error handling.
 
 Provides the TorrentFile class for parsing bencoded torrent files,
-extracting metadata, generating info hashes, and creating magnet links.
+extracting metadata, generating info hashes, creating magnet links,
+and modifying tracker lists for public torrents.
+
+Key features:
+- Parse .torrent files and extract metadata
+- Generate info hashes for torrent identification
+- Create magnet links from torrent files
+- Check if a torrent is private (is_private property)
+- Add trackers to public torrents (add_trackers method)
 
 Custom exceptions:
 - TorrentFileError: Base exception for all torrent file errors
@@ -139,6 +147,32 @@ class TorrentFile:
             return [self.torrent_data['announce']]
         else:
             return []
+
+    @property
+    def is_private(self) -> bool:
+        """Check if this is a private torrent (private flag set in info dict)."""
+        return self.info.get('private', 0) == 1
+
+    def add_trackers(self, trackers: list[str]):
+        """
+        Add trackers to the torrent, avoiding duplicates.
+
+        Trackers are added to the announce-list as separate tiers.
+        """
+        existing = set(self.trackers())
+
+        # Ensure announce-list exists
+        if 'announce-list' not in self.torrent_data:
+            if 'announce' in self.torrent_data:
+                self.torrent_data['announce-list'] = [[self.torrent_data['announce']]]
+            else:
+                self.torrent_data['announce-list'] = []
+
+        # Add new trackers as individual tiers
+        for tracker in trackers:
+            if tracker not in existing:
+                self.torrent_data['announce-list'].append([tracker])
+                existing.add(tracker)
 
     def metadata(self):
         data = {}
