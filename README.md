@@ -47,14 +47,17 @@ A Python application for managing torrent client instances with a secure REST AP
 # Install dependencies
 pip install -r requirements.txt
 
-# Start the server
-python server.py
+# Start the server (easiest way from project root)
+python run_server.py
+
+# Alternative: Start directly from package
+python -m torrent_manager.server
 
 # Or with auto-reload for development
-python server.py --reload
+python run_server.py --reload
 ```
 
-The API will be available at http://localhost:8000 with interactive documentation at http://localhost:8000/docs
+The API will be available at http://localhost:8144 with interactive documentation at http://localhost:8144/docs
 
 ### Start the rTorrent Docker Container
 

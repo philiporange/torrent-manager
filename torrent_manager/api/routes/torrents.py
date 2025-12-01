@@ -5,10 +5,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from torrent_manager.models import TorrentServer, User
 from torrent_manager.client_factory import get_client
+from torrent_manager.config import Config
 from torrent_manager.logger import logger
 from torrent_manager.magnet_link import MagnetLink
 from torrent_manager.torrent_file import TorrentFile
 from torrent_manager.trackers import get_cached_trackers, is_augmentation_enabled
+from torrent_manager.activity import Activity
+from torrent_manager.polling import get_poller
 from ..schemas import AddTorrentRequest, TorrentActionRequest
 from ..dependencies import get_current_user, get_user_server, find_torrent_server
 
@@ -36,6 +39,7 @@ async def list_torrents(
     """
     List all torrents from all configured servers.
 
+    Returns cached torrent data from the background polling service.
     Optionally filter by server_id to list torrents from a specific server.
 
     Returns detailed information about each torrent including:
@@ -43,35 +47,10 @@ async def list_torrents(
     - Progress, state (active/paused)
     - Download/upload rates
     - Peers, ratio
+    - Seeding duration and threshold (for completed torrents)
     """
-    all_torrents = []
-
-    if server_id:
-        # Filter by specific server
-        servers = [get_user_server(server_id, user)]
-    else:
-        # Get all enabled servers for this user
-        servers = TorrentServer.select().where(
-            (TorrentServer.user_id == user.id) & (TorrentServer.enabled == True)
-        )
-
-    for server in servers:
-        try:
-            client = get_client(server)
-            torrents = list(client.list_torrents())
-
-            # Add server info to each torrent
-            for torrent in torrents:
-                torrent["server_id"] = server.id
-                torrent["server_name"] = server.name
-                torrent["server_type"] = server.server_type
-
-            all_torrents.extend(torrents)
-        except Exception as e:
-            logger.error(f"Failed to list torrents from server {server.name}: {e}")
-            # Continue with other servers even if one fails
-
-    return all_torrents
+    poller = get_poller()
+    return poller.get_cached_torrents(user.id, server_id)
 
 
 def augment_magnet_with_trackers(magnet_uri: str) -> str:
@@ -132,6 +111,10 @@ async def add_torrent(request: AddTorrentRequest, user: User = Depends(get_curre
             )
 
         if result:
+            # Immediately poll the server to update cache
+            poller = get_poller()
+            await poller.poll_server(server)
+
             return {
                 "message": "Torrent added successfully",
                 "uri": uri,
@@ -206,6 +189,10 @@ async def upload_torrent(
         os.remove(tmp_path)
 
         if result:
+            # Immediately poll the server to update cache
+            poller = get_poller()
+            await poller.poll_server(server)
+
             return {
                 "message": "Torrent uploaded and added successfully",
                 "server_id": server.id,
@@ -299,6 +286,11 @@ async def start_torrent(
 
     try:
         client.start(info_hash)
+
+        # Immediately poll the server to update cache
+        poller = get_poller()
+        await poller.poll_server(server)
+
         return {"message": "Torrent started", "info_hash": info_hash, "server_id": server.id}
     except Exception as e:
         logger.error(f"Failed to start torrent: {e}")
@@ -328,6 +320,11 @@ async def stop_torrent(
 
     try:
         client.stop(info_hash)
+
+        # Immediately poll the server to update cache
+        poller = get_poller()
+        await poller.poll_server(server)
+
         return {"message": "Torrent stopped", "info_hash": info_hash, "server_id": server.id}
     except Exception as e:
         logger.error(f"Failed to stop torrent: {e}")
@@ -361,6 +358,11 @@ async def delete_torrent(
 
     try:
         client.erase(info_hash)
+
+        # Immediately poll the server to update cache
+        poller = get_poller()
+        await poller.poll_server(server)
+
         return {"message": "Torrent removed", "info_hash": info_hash, "server_id": server.id}
     except Exception as e:
         logger.error(f"Failed to remove torrent: {e}")

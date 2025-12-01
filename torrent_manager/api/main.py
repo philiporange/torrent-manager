@@ -1,4 +1,6 @@
+import asyncio
 import datetime
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -6,14 +8,109 @@ from torrent_manager.config import Config
 from torrent_manager.logger import logger
 from torrent_manager.auth import SessionManager, ApiKeyManager
 from torrent_manager.trackers import fetch_trackers
+from torrent_manager.polling import get_poller
 
 from .routes import auth, servers, torrents, admin, pages
 from .routes.auth import set_session_cookie
 
+
+async def seeding_monitor_task():
+    """Background task to monitor seeding duration and auto-pause torrents."""
+    from torrent_manager.models import TorrentServer
+    from torrent_manager.client_factory import get_client
+    from torrent_manager.activity import Activity
+
+    while True:
+        try:
+            if Config.AUTO_PAUSE_SEEDING:
+                activity = Activity()
+
+                for server in TorrentServer.select().where(TorrentServer.enabled == True):
+                    try:
+                        client = get_client(server)
+                        for torrent in client.list_torrents():
+                            info_hash = torrent['info_hash']
+                            is_seeding = torrent.get('is_active') and torrent.get('complete')
+                            is_private = torrent.get('is_private', False)
+
+                            # Record status for duration tracking
+                            activity.record_torrent_status(
+                                info_hash,
+                                server_id=server.id,
+                                is_seeding=is_seeding,
+                                is_private=is_private
+                            )
+
+                            # Check for auto-pause if actively seeding
+                            if is_seeding:
+                                duration = activity.calculate_seeding_duration(
+                                    info_hash,
+                                    max_interval=Config.MAX_INTERVAL
+                                )
+                                threshold = (Config.PRIVATE_SEED_DURATION if is_private
+                                           else Config.PUBLIC_SEED_DURATION)
+
+                                if duration >= threshold:
+                                    name = torrent.get('name', info_hash)
+                                    hours = duration / 3600
+                                    logger.info(
+                                        f"Auto-pausing {'private' if is_private else 'public'} "
+                                        f"torrent: {name} (seeded {hours:.1f}h)"
+                                    )
+                                    client.stop(info_hash)
+                    except Exception as e:
+                        logger.error(f"Error monitoring server {server.name}: {e}")
+
+                activity.close()
+        except Exception as e:
+            logger.error(f"Error in seeding monitor: {e}")
+
+        await asyncio.sleep(Config.SEEDING_CHECK_INTERVAL)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events."""
+    # Startup
+    logger.info("Starting Torrent Manager API")
+    SessionManager.cleanup_expired_sessions()
+    SessionManager.cleanup_expired_tokens()
+    ApiKeyManager.cleanup_expired_keys()
+
+    # Fetch and cache public tracker list
+    await fetch_trackers()
+
+    # Start background seeding monitor
+    monitor_task = asyncio.create_task(seeding_monitor_task())
+    logger.info(f"Seeding monitor started (interval: {Config.SEEDING_CHECK_INTERVAL}s, "
+                f"auto-pause: {Config.AUTO_PAUSE_SEEDING})")
+
+    # Start background torrent poller
+    poller = get_poller()
+    poller_task = asyncio.create_task(poller.run())
+
+    yield
+
+    # Shutdown
+    poller.stop()
+    poller_task.cancel()
+    monitor_task.cancel()
+    try:
+        await poller_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await monitor_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("Torrent Manager API shutdown complete")
+
+
 app = FastAPI(
     title="Torrent Manager API",
     description="API for managing torrent servers (rTorrent and Transmission) with secure session-based authentication",
-    version="2.0.0"
+    version="2.0.0",
+    lifespan=lifespan
 )
 
 # Mount static files
@@ -40,9 +137,8 @@ async def session_renewal_middleware(request: Request, call_next):
     """
     Middleware to handle session renewal with sliding expiration.
 
-    On each meaningful request:
-    - If user is active, reissue the cookie with new expiry (sliding window < 7 days to be ITP-safe)
-    - Also handles setting session cookie when created from remember-me token
+    Only renews session cookie on index page loads to reduce overhead.
+    Always handles setting session cookie when created from remember-me token.
     """
     response = await call_next(request)
 
@@ -55,7 +151,8 @@ async def session_renewal_middleware(request: Request, call_next):
             # Set the new session cookie
             new_session_id = request.state.new_session_id
             set_session_cookie(response, new_session_id, session.expires_at)
-        else:
+        # Only renew on index page loads
+        elif request.url.path == "/":
             # Try to renew existing session (sliding expiration)
             renewed, new_expires_at = SessionManager.renew_session(session.session_id)
 
@@ -72,18 +169,6 @@ app.include_router(servers.router)
 app.include_router(torrents.router)
 app.include_router(admin.router)
 app.include_router(pages.router)
-
-# Cleanup tasks (could be run periodically with a background task)
-@app.on_event("startup")
-async def startup_event():
-    """Run cleanup and initialization on startup."""
-    logger.info("Starting Torrent Manager API")
-    SessionManager.cleanup_expired_sessions()
-    SessionManager.cleanup_expired_tokens()
-    ApiKeyManager.cleanup_expired_keys()
-
-    # Fetch and cache public tracker list
-    await fetch_trackers()
 
 
 if __name__ == "__main__":

@@ -10,7 +10,6 @@ from .logger import logger
 
 INCOMPLETE_PATH = Config.INCOMPLETE_PATH
 COMPLETE_PATH = Config.COMPLETE_PATH
-MIN_SEEDING_DURATION = Config.MIN_SEEDING_DURATION
 MAX_INTERVAL = Config.MAX_INTERVAL
 
 
@@ -81,11 +80,29 @@ class Manager:
                 self.move(info_hash, COMPLETE_PATH)
 
     def pause_seeded(self):
-        for info_hash in self.get_seeding_torrents():
-            seeding_duration = self.get_seeding_duration(info_hash)
-            if seeding_duration > MIN_SEEDING_DURATION:
-                logger.info(f"Pausing long-seeded torrent {self.rtorrent.d.name(info_hash)}")
-                self.rtorrent.d.stop(info_hash)
+        """Pause torrents that have exceeded their seeding duration threshold."""
+        if not Config.AUTO_PAUSE_SEEDING:
+            return
+
+        for torrent in self.client.list_torrents():
+            info_hash = torrent['info_hash']
+
+            # Skip if not actively seeding
+            if not torrent.get('is_active') or not torrent.get('complete'):
+                continue
+
+            is_private = torrent.get('is_private', False)
+            seeding_duration = self.activity.calculate_seeding_duration(info_hash, max_interval=MAX_INTERVAL)
+
+            # Select threshold based on private status
+            threshold = Config.PRIVATE_SEED_DURATION if is_private else Config.PUBLIC_SEED_DURATION
+
+            if seeding_duration >= threshold:
+                name = torrent.get('name', info_hash)
+                hours = seeding_duration / 3600
+                logger.info(f"Auto-pausing {'private' if is_private else 'public'} torrent: {name} "
+                           f"(seeded for {hours:.1f} hours)")
+                self.client.stop(info_hash)
 
     def remove_old_seeded(self):
         for info_hash in self.get_torrents():

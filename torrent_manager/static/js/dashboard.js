@@ -1,6 +1,13 @@
 let pollingEnabled = true;
 let servers = [];
 
+function formatDuration(seconds) {
+    if (!seconds || seconds <= 0) return '0m';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
+    return `${(seconds / 86400).toFixed(1)}d`;
+}
+
 async function loadTorrents() {
     const listEl = document.getElementById('torrentsList');
     const loadingEl = document.getElementById('loadingSpinner');
@@ -144,6 +151,16 @@ function renderTorrentList(torrents, container) {
                     <span>${formatBytes(t.size || 0)}</span>
                 </div>
             </div>
+            ${isFinished ? `
+            <div class="flex items-center gap-2 mt-3 pt-3 border-t border-slate-100 text-sm text-slate-500">
+                <i class="fas fa-seedling ${t.seeding_duration >= t.seed_threshold ? 'text-emerald-500' : 'text-slate-400'}"></i>
+                <span>Seeded: ${formatDuration(t.seeding_duration)} / ${formatDuration(t.seed_threshold)}</span>
+                <div class="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden ml-2">
+                    <div class="h-full ${t.seeding_duration >= t.seed_threshold ? 'bg-emerald-500' : 'bg-indigo-500'} transition-all duration-500"
+                         style="width: ${Math.min(100, (t.seeding_duration / t.seed_threshold) * 100)}%"></div>
+                </div>
+            </div>
+            ` : ''}
         </div>
         `;
     }).join('');

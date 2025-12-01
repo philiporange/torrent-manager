@@ -21,8 +21,17 @@ INCOMPLETE_DIR = "downloads"
 INCOMPLETE_PATH = os.path.join(HOME, INCOMPLETE_DIR)
 COMPLETE_DIR = "complete"
 COMPLETE_PATH = os.path.join(HOME, COMPLETE_DIR)
-MIN_SEEDING_DURATION = 24 * 3600
 MAX_INTERVAL = 300
+
+# Seeding duration settings (in seconds)
+PUBLIC_SEED_DURATION = 0
+PRIVATE_SEED_DURATION = 7 * 24 * 3600  # 7 days for private torrents
+AUTO_PAUSE_SEEDING = True              # Enable/disable auto-pause feature
+SEEDING_CHECK_INTERVAL = 300           # Check interval in seconds (5 minutes)
+
+# Server polling intervals (in seconds)
+POLL_SERVER_IDLE_INTERVAL = 60         # Poll servers every 60s when idle
+POLL_SERVER_ACTIVE_INTERVAL = 15       # Poll servers every 15s when downloads active
 
 RTORRENT_RPC_URL = "http://localhost:9080/RPC2"
 
@@ -56,8 +65,17 @@ class Config:
 
     INCOMPLETE_PATH = os.getenv("INCOMPLETE_PATH", INCOMPLETE_PATH)
     COMPLETE_PATH = os.getenv("COMPLETE_PATH", COMPLETE_PATH)
-    MIN_SEEDING_DURATION = int(os.getenv("MIN_SEEDING_DURATION", MIN_SEEDING_DURATION))
     MAX_INTERVAL = int(os.getenv("MAX_INTERVAL", MAX_INTERVAL))
+
+    # Seeding duration settings
+    PUBLIC_SEED_DURATION = int(os.getenv("PUBLIC_SEED_DURATION", PUBLIC_SEED_DURATION))
+    PRIVATE_SEED_DURATION = int(os.getenv("PRIVATE_SEED_DURATION", PRIVATE_SEED_DURATION))
+    AUTO_PAUSE_SEEDING = os.getenv("AUTO_PAUSE_SEEDING", str(AUTO_PAUSE_SEEDING)).lower() == "true"
+    SEEDING_CHECK_INTERVAL = int(os.getenv("SEEDING_CHECK_INTERVAL", SEEDING_CHECK_INTERVAL))
+
+    # Server polling intervals
+    POLL_SERVER_IDLE_INTERVAL = int(os.getenv("POLL_SERVER_IDLE_INTERVAL", POLL_SERVER_IDLE_INTERVAL))
+    POLL_SERVER_ACTIVE_INTERVAL = int(os.getenv("POLL_SERVER_ACTIVE_INTERVAL", POLL_SERVER_ACTIVE_INTERVAL))
 
     RTORRENT_RPC_URL = os.getenv("RTORRENT_RPC_URL", RTORRENT_RPC_URL)
 

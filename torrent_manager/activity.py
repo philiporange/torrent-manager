@@ -7,29 +7,44 @@ from .dbs import sdb as db
 
 
 class Activity:
-    def __init__(self, db_path=Config.DB_PATH):
-        self.db_path = db_path
+    def __init__(self):
         self.db = db
-        if not self.db.is_closed():
-            self.db.close()
-        self.db.init(self.db_path)
-        self.db.connect()
+        if self.db.is_closed():
+            self.db.connect()
 
-    def record_torrent_status(self, info_hash, is_seeding=True, timestamp=None):
+    def record_torrent_status(self, info_hash, server_id=None, is_seeding=True,
+                              is_private=False, timestamp=None):
         if timestamp is None:
             timestamp = datetime.datetime.now()
         Status.create(
             torrent_hash=info_hash,
+            server_id=server_id,
             status='seeding' if is_seeding else 'stopped',
             progress=1.0 if is_seeding else 0.0,
             seeders=0,
             leechers=0,
             down_rate=0,
             up_rate=0,
+            is_private=is_private,
             timestamp=timestamp,
         )
 
+    def is_torrent_private(self, info_hash) -> bool:
+        """Get the private status from the most recent status record."""
+        latest = (Status
+                  .select()
+                  .where(Status.torrent_hash == info_hash)
+                  .order_by(Status.timestamp.desc())
+                  .first())
+        return latest.is_private if latest else False
+
     def calculate_seeding_duration(self, info_hash, max_interval=300):
+        """
+        Calculate total seeding duration from status records.
+
+        Uses max_interval with 20% buffer to account for timing variations
+        in the background task execution.
+        """
         logs = (Status
                 .select()
                 .where(Status.torrent_hash == info_hash)
@@ -37,12 +52,14 @@ class Activity:
 
         seeding_duration = 0
         last_seeding_time = None
+        # Add 20% buffer to max_interval to account for timing variations
+        interval_threshold = max_interval * 1.2
 
         for log in logs:
             if log.status == 'seeding':
                 if last_seeding_time is not None:
                     time_since_last_seeding = (log.timestamp - last_seeding_time).total_seconds()
-                    if time_since_last_seeding < max_interval:
+                    if time_since_last_seeding <= interval_threshold:
                         seeding_duration += time_since_last_seeding
 
                 last_seeding_time = log.timestamp

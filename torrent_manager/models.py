@@ -119,6 +119,7 @@ class Status(BaseModel):
     leechers = IntegerField()
     down_rate = IntegerField()
     up_rate = IntegerField()
+    is_private = BooleanField(default=False)
     timestamp = DateTimeField(default=datetime.datetime.now)
 
 
