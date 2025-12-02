@@ -287,6 +287,25 @@ async def start_torrent(
     try:
         client.start(info_hash)
 
+        # Check if this completed torrent has already met its seeding threshold
+        if Config.AUTO_PAUSE_SEEDING:
+            torrent = next(client.list_torrents(info_hash=info_hash), None)
+            if torrent and torrent.get("complete"):
+                activity = Activity()
+                try:
+                    is_private = torrent.get("is_private", False)
+                    duration = activity.calculate_seeding_duration(
+                        info_hash, max_interval=Config.MAX_INTERVAL
+                    )
+                    threshold = (Config.PRIVATE_SEED_DURATION if is_private
+                                else Config.PUBLIC_SEED_DURATION)
+
+                    if duration >= threshold:
+                        client.stop(info_hash)
+                        logger.info(f"Re-paused torrent {info_hash} (already seeded {duration/3600:.1f}h)")
+                finally:
+                    activity.close()
+
         # Immediately poll the server to update cache
         poller = get_poller()
         await poller.poll_server(server)
