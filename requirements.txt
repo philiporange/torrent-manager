@@ -2,7 +2,9 @@ bencodepy
 docker
 fastapi
 httpx
+libtorrent
 loguru
+magnet2torrent
 passlib[bcrypt]
 peewee
 pytest

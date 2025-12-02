@@ -1,7 +1,14 @@
+"""
+Magnet link parsing and reconstruction.
+
+Provides the MagnetLink class for parsing magnet URIs into components
+(info hash, name, trackers, size) and reconstructing them. The to_uri()
+method preserves the unencoded 'urn:btih:' format required by most
+torrent clients including rTorrent.
+"""
+
 import re
-from urllib.parse import parse_qs, urlencode
-import tempfile
-import time
+from urllib.parse import parse_qs, quote
 import os
 
 
@@ -25,15 +32,26 @@ class MagnetLink:
         self.size = int(params.get('xl', [0])[0])
 
     def to_uri(self):
-        # Reconstruct the magnet URI from the parsed data
-        params = {
-            'xt': f'urn:btih:{self.info_hash}',
-            'dn': self.name,
-            'tr': self.trackers,
-        }
+        """
+        Reconstruct the magnet URI from the parsed data.
+
+        The xt parameter is built manually to avoid encoding colons in
+        'urn:btih:' which breaks compatibility with many torrent clients
+        including rTorrent.
+        """
+        # Build xt parameter manually - colons in urn:btih: must NOT be encoded
+        parts = [f"xt=urn:btih:{self.info_hash}"]
+
+        if self.name:
+            parts.append(f"dn={quote(self.name, safe='')}")
+
+        for tracker in self.trackers:
+            parts.append(f"tr={quote(tracker, safe='')}")
+
         if self.size:
-            params['xl'] = str(self.size)
-        return f"magnet:?{urlencode(params, doseq=True)}"
+            parts.append(f"xl={self.size}")
+
+        return f"magnet:?{'&'.join(parts)}"
 
     def info_hash(self):
         return self.info_hash
@@ -78,29 +96,37 @@ class MagnetLink:
         return re.match(pattern, magnet_uri) is not None
 
     def download_torrent(self, path):
-        import libtorrent as lt
-        temp_dir = tempfile.gettempdir()
+        """
+        Download torrent metadata from the swarm and save as a .torrent file.
 
-        ses = lt.session()
-        params = {
-            'save_path': temp_dir,
-            'storage_mode': lt.storage_mode_t(2),
-        }
-        
-        handle = lt.add_magnet_uri(ses, self.magnet_uri, params)
-        while not handle.has_metadata():
-            time.sleep(1)
+        Uses magnet2torrent module which handles tracker augmentation and the
+        libtorrent params.trackers copy issue correctly.
+        """
+        from magnet2torrent import core as m2t
 
-        # Save the torrent file
-        torrent_info = handle.get_torrent_info()
-        filename = os.path.basename(path)
-        save_path = os.path.join(temp_dir, filename)
-        with open(save_path, 'wb') as f:
-            f.write(lt.bencode(torrent_info.generate()))
+        output_dir = os.path.dirname(os.path.abspath(path))
 
-        # Delete the handle
-        ses.remove_torrent(handle)
+        # Get public trackers for better connectivity
+        public_trackers = m2t.get_public_trackers(proxy_enabled=False)
 
-        # Move the torrent file to the specified path
-        os.rename(save_path, path)
-        os.rmdir(temp_dir)
+        # Create session and process magnet
+        ses = m2t.create_session(enable_dht=False)
+        try:
+            m2t.process_magnet(ses, self.magnet_uri, output_dir, public_trackers)
+        finally:
+            del ses
+
+        # magnet2torrent saves with the torrent name, we may need to rename
+        # Find the generated file and rename if needed
+        expected_name = os.path.basename(path)
+        generated_files = [f for f in os.listdir(output_dir) if f.endswith('.torrent')]
+
+        # If the file wasn't created with our expected name, find and rename it
+        if expected_name not in generated_files and generated_files:
+            # Find the most recently created .torrent file
+            latest = max(
+                [os.path.join(output_dir, f) for f in generated_files],
+                key=os.path.getmtime
+            )
+            if latest != path:
+                os.rename(latest, path)

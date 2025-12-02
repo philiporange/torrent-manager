@@ -139,19 +139,28 @@ class RTorrentClient(BaseTorrentClient):
         return result == 0
     
     def add_magnet(self, uri, start=True, priority=1):
-        ml = MagnetLink(uri)
-        info_hash = ml.info_hash
-        
-        # Add magnet
-        if start:
-            result = self.client.load.start("", uri)
-        else:
-            result = self.client.load("", uri)
+        """Add a magnet link to rTorrent."""
+        try:
+            ml = MagnetLink(uri)
+            info_hash = ml.info_hash
 
-        if priority != 1:
-            self.set_priority(info_hash, priority)
+            if start:
+                result = self.client.load.start("", uri)
+            else:
+                result = self.client.load("", uri)
 
-        return result == 0
+            if result == 0:
+                logger.debug(f"Added magnet to rTorrent: {info_hash}")
+                if priority != 1:
+                    self.set_priority(info_hash, priority)
+                return True
+
+            logger.error(f"rTorrent rejected magnet: {info_hash}")
+            return False
+
+        except Exception as e:
+            logger.error(f"Failed to add magnet to rTorrent: {e}", exc_info=True)
+            return False
 
     def stop(self, info_hash):
         return self.client.d.stop(info_hash)
