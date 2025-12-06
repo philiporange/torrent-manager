@@ -1,7 +1,7 @@
 import secrets
 import posixpath
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 from torrent_manager.models import TorrentServer, User
@@ -21,6 +21,14 @@ async def add_server(request: AddServerRequest, user: User = Depends(get_current
             detail="server_type must be 'rtorrent' or 'transmission'"
         )
 
+    # If this is the first server or marked as default, clear other defaults
+    existing_servers = TorrentServer.select().where(TorrentServer.user_id == user.id)
+    is_first = existing_servers.count() == 0
+    is_default = request.is_default or is_first
+
+    if is_default:
+        TorrentServer.update(is_default=False).where(TorrentServer.user_id == user.id).execute()
+
     server_id = secrets.token_urlsafe(16)
     server = TorrentServer.create(
         id=server_id,
@@ -34,6 +42,7 @@ async def add_server(request: AddServerRequest, user: User = Depends(get_current
         rpc_path=request.rpc_path,
         use_ssl=request.use_ssl,
         enabled=True,
+        is_default=is_default,
         http_host=request.http_host,
         http_port=request.http_port,
         http_path=request.http_path,
@@ -54,6 +63,7 @@ async def add_server(request: AddServerRequest, user: User = Depends(get_current
         "rpc_path": server.rpc_path,
         "use_ssl": server.use_ssl,
         "enabled": server.enabled,
+        "is_default": server.is_default,
         "created_at": server.created_at.isoformat(),
         "http_host": server.http_host,
         "http_port": server.http_port,
@@ -78,6 +88,7 @@ async def list_servers(user: User = Depends(get_current_user)):
             "rpc_path": s.rpc_path,
             "use_ssl": s.use_ssl,
             "enabled": s.enabled,
+            "is_default": s.is_default,
             "created_at": s.created_at.isoformat(),
             "http_host": s.http_host,
             "http_port": s.http_port,
@@ -104,6 +115,7 @@ async def get_server(server_id: str, user: User = Depends(get_current_user)):
         "rpc_path": server.rpc_path,
         "use_ssl": server.use_ssl,
         "enabled": server.enabled,
+        "is_default": server.is_default,
         "created_at": server.created_at.isoformat(),
         "http_host": server.http_host,
         "http_port": server.http_port,
@@ -151,6 +163,11 @@ async def update_server(
         server.http_password = request.http_password
     if request.http_use_ssl is not None:
         server.http_use_ssl = request.http_use_ssl
+    if request.is_default is not None:
+        if request.is_default:
+            # Clear other defaults when setting this one as default
+            TorrentServer.update(is_default=False).where(TorrentServer.user_id == user.id).execute()
+        server.is_default = request.is_default
 
     server.save()
 
@@ -172,7 +189,8 @@ async def update_server(
         "http_path": server.http_path,
         "http_username": server.http_username,
         "http_use_ssl": server.http_use_ssl,
-        "http_enabled": bool(server.http_port)
+        "http_enabled": bool(server.http_port),
+        "is_default": server.is_default
     }
 
 
@@ -255,6 +273,7 @@ async def list_server_files(
 async def download_file(
     server_id: str,
     file_path: str,
+    request: Request,
     user: User = Depends(get_current_user)
 ):
     """
@@ -262,6 +281,7 @@ async def download_file(
 
     This endpoint streams the file through the API server, acting as a proxy
     so that end users don't need the server's HTTP credentials.
+    Supports HTTP Range requests for media seeking.
     """
     server = get_user_server(server_id, user)
     client = get_http_client(server)
@@ -278,19 +298,27 @@ async def download_file(
         # Build the URL for the file
         url = client._build_url(file_path, is_dir=False)
 
+        # Forward range header if present for seeking support
+        request_headers = {}
+        range_header = request.headers.get("Range")
+        if range_header:
+            request_headers['Range'] = range_header
+
         # Stream the response
-        # Run blocking request in threadpool to avoid blocking event loop
         response = await run_in_threadpool(
-            client._session_get, 
-            url, 
-            stream=True, 
-            timeout=client.timeout
+            client._session_get,
+            url,
+            stream=True,
+            timeout=client.timeout,
+            headers=request_headers
         )
         response.raise_for_status()
 
-        # Get content type and length from upstream
+        # Get headers from upstream
         content_type = response.headers.get("Content-Type", "application/octet-stream")
         content_length = response.headers.get("Content-Length")
+        content_range = response.headers.get("Content-Range")
+        accept_ranges = response.headers.get("Accept-Ranges", "bytes")
 
         def generate():
             try:
@@ -301,13 +329,19 @@ async def download_file(
                 response.close()
 
         headers = {
-            "Content-Disposition": f'attachment; filename="{filename}"'
+            "Accept-Ranges": accept_ranges
         }
         if content_length:
             headers["Content-Length"] = content_length
+        if content_range:
+            headers["Content-Range"] = content_range
+
+        # Return 206 for partial content, 200 for full file
+        status_code = 206 if content_range else 200
 
         return StreamingResponse(
             generate(),
+            status_code=status_code,
             media_type=content_type,
             headers=headers
         )

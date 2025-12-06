@@ -33,6 +33,9 @@ function renderServersList(container) {
                 <div>
                     <h3 class="text-lg font-semibold text-slate-900 flex items-center gap-2">
                         ${s.name}
+                        ${s.is_default ? `<span class="text-xs font-medium px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                            <i class="fas fa-star mr-1"></i>Default
+                        </span>` : ''}
                         <span class="text-xs font-medium px-2.5 py-0.5 rounded-full ${s.server_type === 'rtorrent' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}">
                             ${s.server_type}
                         </span>
@@ -49,6 +52,9 @@ function renderServersList(container) {
             </div>
 
             <div class="flex items-center gap-2">
+                ${!s.is_default ? `<button onclick="setDefaultServer('${s.id}')" class="px-4 py-2 text-sm font-medium text-amber-600 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors">
+                    <i class="fas fa-star mr-2"></i> Set Default
+                </button>` : ''}
                 ${s.http_enabled ? `<button onclick="browseFiles('${s.id}')" class="px-4 py-2 text-sm font-medium text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors">
                     <i class="fas fa-folder-open mr-2"></i> Files
                 </button>` : ''}
@@ -145,6 +151,19 @@ async function deleteServer(id) {
         await apiRequest(`/servers/${id}`, { method: 'DELETE' });
         showToast('Server deleted');
         loadServers();
+    }
+}
+
+async function setDefaultServer(id) {
+    try {
+        await apiRequest(`/servers/${id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ is_default: true })
+        });
+        showToast('Default server updated');
+        loadServers();
+    } catch (error) {
+        // handled
     }
 }
 

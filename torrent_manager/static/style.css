@@ -10,8 +10,20 @@
     --success-color: #10b981;
     --warning-color: #f59e0b;
     --danger-color: #ef4444;
-    --radius: 8px;
+    --radius: 3px;
     --shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+}
+
+* {
+    border-radius: 3px;
+}
+
+.rounded-full {
+    border-radius: 9999px;
+}
+
+.rounded-lg, .rounded-xl {
+    border-radius: 3px !important;
 }
 
 body {
@@ -207,4 +219,91 @@ body {
 .global-drop-zone .dz-message {
     color: var(--primary-color);
     text-align: center;
+}
+
+/* Menu Drawer */
+.menu-drawer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 280px;
+    height: 100vh;
+    background: white;
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.1);
+}
+
+.menu-drawer.open {
+    transform: translateX(0);
+}
+
+.menu-drawer-content {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 1.5rem;
+    position: relative;
+}
+
+.menu-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.3);
+    z-index: 55;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.menu-overlay.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+/* Management Drawer (bottom) */
+.management-drawer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    max-height: 70vh;
+    background: white;
+    z-index: 55;
+    transform: translateY(100%);
+    transition: transform 0.3s ease;
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.15);
+    border-radius: 3px 3px 0 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.management-drawer.open {
+    transform: translateY(0);
+}
+
+.management-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.3);
+    z-index: 54;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.management-overlay.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+/* Floating buttons - 50% opacity by default */
+.floating-btn {
+    opacity: 0.5;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.floating-btn:hover {
+    opacity: 1;
 }

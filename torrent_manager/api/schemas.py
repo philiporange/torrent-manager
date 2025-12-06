@@ -36,6 +36,7 @@ class AddServerRequest(BaseModel):
     password: Optional[str] = None
     rpc_path: Optional[str] = None  # For rTorrent (e.g., "/RPC2")
     use_ssl: bool = False
+    is_default: bool = False
     # HTTP download server configuration
     http_host: Optional[str] = None
     http_port: Optional[int] = None
@@ -54,6 +55,7 @@ class UpdateServerRequest(BaseModel):
     rpc_path: Optional[str] = None
     use_ssl: Optional[bool] = None
     enabled: Optional[bool] = None
+    is_default: Optional[bool] = None
     # HTTP download server configuration
     http_host: Optional[str] = None
     http_port: Optional[int] = None

@@ -7,108 +7,64 @@
     <script src="/static/tailwind.js"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="/static/style.css" rel="stylesheet">
     <style>body { font-family: 'Inter', sans-serif; }</style>
 </head>
 <body class="h-full">
-    
-    <!-- Navbar Placeholder -->
-    <div id="navbar-placeholder"></div>
 
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <!-- Header & Stats -->
-        <div class="mb-8">
-            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-                <h2 class="text-2xl font-bold leading-7 text-slate-900 sm:text-3xl">
-                    Dashboard
-                </h2>
-                <div class="flex gap-3">
-                    <button onclick="openModal('addModal')" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
-                        <i class="fas fa-plus mr-2"></i> Add Torrent
-                    </button>
-                </div>
+    <!-- Main Content - Full Screen -->
+    <div class="fixed inset-0 pt-0 pb-12 overflow-hidden flex flex-col">
+        <div id="loadingSpinner" class="flex-1 flex justify-center items-center">
+            <i class="fas fa-circle-notch fa-spin text-indigo-500 text-3xl"></i>
+        </div>
+        <div id="emptyState" class="hidden flex-1 flex flex-col justify-center items-center">
+            <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 mb-4">
+                <i class="fas fa-inbox text-slate-400 text-2xl"></i>
             </div>
-
-            <div class="grid grid-cols-2 lg:grid-cols-5 gap-4">
-                <div class="bg-white overflow-hidden shadow rounded-lg p-5 border border-slate-200">
-                    <div class="flex items-center">
-                        <div class="flex-shrink-0 p-3 rounded-md bg-indigo-50 text-indigo-600">
-                            <i class="fas fa-arrow-down"></i>
-                        </div>
-                        <div class="ml-4 w-0 flex-1">
-                            <dl>
-                                <dt class="text-sm font-medium text-slate-500 truncate">Down Speed</dt>
-                                <dd class="text-lg font-semibold text-slate-900" id="stat-down-speed">0 B/s</dd>
-                            </dl>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="bg-white overflow-hidden shadow rounded-lg p-5 border border-slate-200">
-                    <div class="flex items-center">
-                        <div class="flex-shrink-0 p-3 rounded-md bg-indigo-50 text-indigo-600">
-                            <i class="fas fa-arrow-up"></i>
-                        </div>
-                        <div class="ml-4 w-0 flex-1">
-                            <dl>
-                                <dt class="text-sm font-medium text-slate-500 truncate">Up Speed</dt>
-                                <dd class="text-lg font-semibold text-slate-900" id="stat-up-speed">0 B/s</dd>
-                            </dl>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="bg-white overflow-hidden shadow rounded-lg p-5 border border-slate-200">
-                    <div class="flex items-center">
-                        <div class="flex-shrink-0 p-3 rounded-md bg-indigo-50 text-indigo-600">
-                            <i class="fas fa-database"></i>
-                        </div>
-                        <div class="ml-4 w-0 flex-1">
-                            <dl>
-                                <dt class="text-sm font-medium text-slate-500 truncate">Downloaded</dt>
-                                <dd class="text-lg font-semibold text-slate-900" id="stat-total-dl">0 B</dd>
-                            </dl>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="bg-white overflow-hidden shadow rounded-lg p-5 border border-slate-200 hidden lg:block">
-                    <div class="flex items-center">
-                        <div class="flex-shrink-0 p-3 rounded-md bg-indigo-50 text-indigo-600">
-                            <i class="fas fa-upload"></i>
-                        </div>
-                        <div class="ml-4 w-0 flex-1">
-                            <dl>
-                                <dt class="text-sm font-medium text-slate-500 truncate">Uploaded</dt>
-                                <dd class="text-lg font-semibold text-slate-900" id="stat-total-ul">0 B</dd>
-                            </dl>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="bg-white overflow-hidden shadow rounded-lg p-5 border border-slate-200">
-                    <div class="flex items-center">
-                        <div class="flex-shrink-0 p-3 rounded-md bg-indigo-50 text-indigo-600">
-                            <i class="fas fa-list"></i>
-                        </div>
-                        <div class="ml-4 w-0 flex-1">
-                            <dl>
-                                <dt class="text-sm font-medium text-slate-500 truncate">Active / Total</dt>
-                                <dd class="text-lg font-semibold text-slate-900">
-                                    <span id="stat-active">0</span> / <span id="stat-count">0</span>
-                                </dd>
-                            </dl>
-                        </div>
-                    </div>
-                </div>
+            <h3 class="text-lg font-medium text-slate-900">No torrents active</h3>
+            <p class="mt-1 text-slate-500">Get started by adding a new download.</p>
+        </div>
+        <div id="torrentsTableContainer" class="hidden flex-1 flex flex-col overflow-hidden">
+            <div class="flex-1 overflow-auto">
+                <table class="min-w-full divide-y divide-slate-200">
+                    <thead class="sticky top-0 z-10">
+                        <tr class="bg-slate-50">
+                            <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider bg-slate-50">Name</th>
+                            <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider w-24 bg-slate-50">Status</th>
+                            <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider w-20 hidden sm:table-cell bg-slate-50">Size <span class="normal-case">(GB)</span></th>
+                            <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider w-24 hidden md:table-cell bg-slate-50">Seed <span class="normal-case">(h)</span></th>
+                            <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider w-28 hidden lg:table-cell bg-slate-50">Server</th>
+                            <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase tracking-wider w-28 hidden xl:table-cell bg-slate-50">Speed <span class="normal-case">(MB/s)</span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="torrentsTbody" class="bg-white divide-y divide-slate-100"></tbody>
+                </table>
             </div>
         </div>
+    </div>
 
-        <!-- Torrents List -->
-        <div class="space-y-4">
-            <div id="loadingSpinner" class="flex justify-center py-12">
-                <i class="fas fa-circle-notch fa-spin text-indigo-500 text-3xl"></i>
+    <!-- Floating Add Button (bottom right) - 50% opacity until hover -->
+    <button onclick="openModal('addModal')" class="fixed bottom-16 right-4 z-40 w-12 h-12 bg-indigo-600 rounded-full shadow-lg flex items-center justify-center text-white opacity-50 hover:opacity-100 hover:scale-105 transition-all">
+        <i class="fas fa-plus text-lg"></i>
+    </button>
+
+    <!-- Fixed Footer Stats Bar -->
+    <div class="fixed bottom-0 left-0 right-0 z-30 bg-white/90 backdrop-blur-md border-t border-slate-200">
+        <div class="px-4 py-2">
+            <div class="flex items-center justify-around text-sm">
+                <div class="flex items-center gap-2 text-slate-600">
+                    <i class="fas fa-arrow-down text-emerald-500"></i>
+                    <span id="stat-down-speed" class="font-semibold">0 B/s</span>
+                </div>
+                <div class="flex items-center gap-2 text-slate-600">
+                    <i class="fas fa-arrow-up text-indigo-500"></i>
+                    <span id="stat-up-speed" class="font-semibold">0 B/s</span>
+                </div>
+                <div class="flex items-center gap-2 text-slate-600">
+                    <i class="fas fa-bolt text-amber-500"></i>
+                    <span><span id="stat-active" class="font-semibold">0</span> / <span id="stat-count">0</span></span>
+                </div>
             </div>
-            <div id="torrentsList" class="grid grid-cols-1 gap-4"></div>
         </div>
     </div>
 
@@ -188,32 +144,185 @@
         </div>
     </div>
 
-    <!-- Torrent Files Modal -->
-    <div id="torrentFilesModal" class="fixed inset-0 z-50 overflow-y-auto hidden" aria-labelledby="modal-title" role="dialog" aria-modal="true">
-        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
-            <div class="fixed inset-0 bg-slate-500 bg-opacity-75 transition-opacity" aria-hidden="true" onclick="closeTorrentFilesModal()"></div>
-            <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+    <!-- Torrent Management Drawer -->
+    <div id="managementDrawer" class="management-drawer">
+        <!-- Close button -->
+        <button onclick="closeManagementModal()" class="absolute top-3 right-3 w-10 h-10 flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-all z-10">
+            <i class="fas fa-times text-xl"></i>
+        </button>
 
-            <div class="relative inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-3xl sm:w-full sm:p-6">
-                <div class="absolute top-0 right-0 pt-4 pr-4">
-                    <button type="button" onclick="closeTorrentFilesModal()" class="bg-white rounded-md text-slate-400 hover:text-slate-500 focus:outline-none">
-                        <span class="sr-only">Close</span>
+        <!-- Header -->
+        <div class="px-4 py-3 border-b border-slate-200">
+            <h3 id="managementTitle" class="text-base font-semibold text-slate-900 truncate pr-12">Torrent Details</h3>
+            <div id="mgmtInfoHash" class="text-xs text-slate-400 font-mono truncate"></div>
+        </div>
+
+        <!-- Info Grid -->
+        <div class="px-4 py-3 border-b border-slate-200 bg-slate-50">
+            <div class="grid grid-cols-3 sm:grid-cols-6 gap-3 text-sm mb-3">
+                <div>
+                    <span class="text-xs text-slate-500">Status</span>
+                    <div id="mgmtStatus" class="font-semibold text-slate-900">-</div>
+                </div>
+                <div>
+                    <span class="text-xs text-slate-500">Progress</span>
+                    <div id="mgmtProgress" class="font-semibold text-slate-900">0%</div>
+                </div>
+                <div>
+                    <span class="text-xs text-slate-500">Size</span>
+                    <div id="mgmtSize" class="font-semibold text-slate-900">0 B</div>
+                </div>
+                <div>
+                    <span class="text-xs text-slate-500">Downloaded</span>
+                    <div id="mgmtDownloaded" class="font-semibold text-slate-900">0 B</div>
+                </div>
+                <div>
+                    <span class="text-xs text-slate-500">Uploaded</span>
+                    <div id="mgmtUploaded" class="font-semibold text-slate-900">0 B</div>
+                </div>
+                <div>
+                    <span class="text-xs text-slate-500">Ratio</span>
+                    <div id="mgmtRatio" class="font-semibold text-slate-900">0.00</div>
+                </div>
+            </div>
+            <div class="grid grid-cols-3 sm:grid-cols-6 gap-3 text-sm mb-3">
+                <div>
+                    <span class="text-xs text-slate-500">Down Speed</span>
+                    <div id="mgmtDownSpeed" class="font-semibold text-slate-900">0 B/s</div>
+                </div>
+                <div>
+                    <span class="text-xs text-slate-500">Up Speed</span>
+                    <div id="mgmtUpSpeed" class="font-semibold text-slate-900">0 B/s</div>
+                </div>
+                <div>
+                    <span class="text-xs text-slate-500">Peers</span>
+                    <div id="mgmtPeers" class="font-semibold text-slate-900">0</div>
+                </div>
+                <div>
+                    <span class="text-xs text-slate-500">Seeds</span>
+                    <div id="mgmtSeeds" class="font-semibold text-slate-900">0</div>
+                </div>
+                <div>
+                    <span class="text-xs text-slate-500">Added</span>
+                    <div id="mgmtAdded" class="font-semibold text-slate-900">-</div>
+                </div>
+                <div>
+                    <span class="text-xs text-slate-500">Server</span>
+                    <div id="mgmtServer" class="font-semibold text-slate-900 truncate">-</div>
+                </div>
+            </div>
+            <div class="flex gap-2 items-center">
+                <button id="mgmtStartBtn" onclick="mgmtStart()" class="flex-1 px-3 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 transition-colors">
+                    <i class="fas fa-play mr-1"></i>Start
+                </button>
+                <button id="mgmtStopBtn" onclick="mgmtStop()" class="flex-1 px-3 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 transition-colors">
+                    <i class="fas fa-pause mr-1"></i>Pause
+                </button>
+                <button id="mgmtDeleteBtn" onclick="mgmtDelete()" class="px-2 py-1 text-xs text-rose-600 hover:bg-rose-50 transition-colors" title="Remove">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Files List -->
+        <div class="px-4 py-3 flex-1 overflow-hidden flex flex-col">
+            <h4 class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Files</h4>
+            <div id="managementFilesList" class="flex-1 overflow-y-auto divide-y divide-slate-100">
+                <div class="text-center py-6 text-slate-400">
+                    <i class="fas fa-circle-notch fa-spin text-indigo-500 text-xl"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="managementOverlay" class="management-overlay" onclick="closeManagementModal()"></div>
+
+    <!-- Delete Confirmation Modal -->
+    <div id="deleteConfirmModal" class="fixed inset-0 z-[60] overflow-y-auto hidden" role="dialog" aria-modal="true">
+        <div class="flex items-center justify-center min-h-screen px-4">
+            <div class="fixed inset-0 bg-slate-900 bg-opacity-50 transition-opacity" onclick="closeDeleteConfirm()"></div>
+            <div class="relative bg-white rounded-xl shadow-xl max-w-sm w-full p-6">
+                <div class="text-center">
+                    <div class="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-rose-100 mb-4">
+                        <i class="fas fa-exclamation-triangle text-rose-600"></i>
+                    </div>
+                    <h3 class="text-lg font-semibold text-slate-900 mb-2">Remove Torrent?</h3>
+                    <p class="text-sm text-slate-500 mb-6">This will remove the torrent from the client. Downloaded files will not be deleted.</p>
+                    <div class="flex gap-3">
+                        <button onclick="closeDeleteConfirm()" class="flex-1 px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors">
+                            Cancel
+                        </button>
+                        <button onclick="confirmDelete()" class="flex-1 px-4 py-2 text-sm font-medium text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition-colors">
+                            Remove
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filter Modal -->
+    <div id="filterModal" class="fixed inset-0 z-50 overflow-y-auto hidden" role="dialog" aria-modal="true">
+        <div class="flex items-center justify-center min-h-screen px-4">
+            <div class="fixed inset-0 bg-slate-900 bg-opacity-50 transition-opacity" onclick="closeFilterModal()"></div>
+            <div class="relative bg-white rounded shadow-xl max-w-sm w-full p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-slate-900">Filter Torrents</h3>
+                    <button onclick="closeFilterModal()" class="text-slate-400 hover:text-slate-600">
                         <i class="fas fa-times"></i>
                     </button>
                 </div>
 
-                <div>
-                    <div class="flex items-center gap-3 mb-4">
-                        <div class="p-2 rounded-lg bg-emerald-50 text-emerald-600">
-                            <i class="fas fa-folder-open text-xl"></i>
+                <div class="space-y-4">
+                    <!-- Status Filter -->
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Status</label>
+                        <div class="flex flex-wrap gap-2">
+                            <label class="inline-flex items-center">
+                                <input type="checkbox" id="filterDownload" checked class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                                <span class="ml-2 text-sm text-slate-600">Download</span>
+                            </label>
+                            <label class="inline-flex items-center">
+                                <input type="checkbox" id="filterSeeding" checked class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                                <span class="ml-2 text-sm text-slate-600">Seeding</span>
+                            </label>
+                            <label class="inline-flex items-center">
+                                <input type="checkbox" id="filterFinished" checked class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                                <span class="ml-2 text-sm text-slate-600">Finished</span>
+                            </label>
                         </div>
-                        <h3 id="torrentFilesTitle" class="text-lg leading-6 font-medium text-slate-900 truncate">Torrent Files</h3>
                     </div>
 
-                    <!-- Files List -->
-                    <div id="torrentFilesList" class="max-h-96 overflow-y-auto divide-y divide-slate-100">
-                        <div class="text-center py-8"><i class="fas fa-circle-notch fa-spin text-indigo-500 text-2xl"></i></div>
+                    <!-- Privacy Filter -->
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Privacy</label>
+                        <div class="flex flex-wrap gap-2">
+                            <label class="inline-flex items-center">
+                                <input type="checkbox" id="filterPublic" checked class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                                <span class="ml-2 text-sm text-slate-600">Public</span>
+                            </label>
+                            <label class="inline-flex items-center">
+                                <input type="checkbox" id="filterPrivate" checked class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                                <span class="ml-2 text-sm text-slate-600">Private</span>
+                            </label>
+                        </div>
                     </div>
+
+                    <!-- Server Filter -->
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 mb-2">Server</label>
+                        <select id="filterServer" class="w-full px-3 py-2 border border-slate-300 text-sm focus:ring-indigo-500 focus:border-indigo-500">
+                            <option value="">All Servers</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="flex gap-2 mt-6">
+                    <button onclick="resetFilters()" class="flex-1 px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors">
+                        Reset
+                    </button>
+                    <button onclick="applyFilters()" class="flex-1 px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 transition-colors">
+                        Apply
+                    </button>
                 </div>
             </div>
         </div>

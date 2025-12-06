@@ -106,10 +106,79 @@ async function checkAuth() {
     }
 }
 
-// Inject Navbar
+// Menu Drawer Toggle
+function toggleMenu() {
+    const drawer = document.getElementById('menuDrawer');
+    const overlay = document.getElementById('menuOverlay');
+    const isOpen = drawer.classList.contains('open');
+
+    if (isOpen) {
+        drawer.classList.remove('open');
+        overlay.classList.remove('active');
+    } else {
+        drawer.classList.add('open');
+        overlay.classList.add('active');
+    }
+}
+
+// Inject Menu Drawer HTML
+function injectMenuDrawer() {
+    // Check if already injected
+    if (document.getElementById('menuDrawer')) return;
+
+    const menuHtml = `
+        <!-- Floating Menu Button -->
+        <button id="menuToggle" onclick="toggleMenu()" class="fixed bottom-16 left-4 z-50 w-12 h-12 bg-white rounded-full shadow-lg border border-slate-200 flex items-center justify-center text-slate-600 hover:text-indigo-600 transition-all opacity-50 hover:opacity-100">
+            <i class="fas fa-bars text-lg"></i>
+        </button>
+
+        <!-- Menu Drawer -->
+        <div id="menuDrawer" class="menu-drawer">
+            <div class="menu-drawer-content">
+                <!-- Close button -->
+                <button onclick="toggleMenu()" class="w-full flex items-center justify-center py-4 mb-4 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-all border-b border-slate-100">
+                    <i class="fas fa-times text-2xl"></i>
+                </button>
+
+                <!-- Navigation Links -->
+                <nav id="menuNav" class="space-y-1 flex-1"></nav>
+
+                <!-- Filter button (torrents page only) -->
+                <div id="menuFilterBtn" class="hidden py-4">
+                    <button onclick="openFilterModal(); toggleMenu();" class="w-full px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2">
+                        <i class="fas fa-filter"></i> Filter Torrents
+                    </button>
+                </div>
+
+                <!-- User info & Logout -->
+                <div class="pt-6 border-t border-slate-200">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <span id="nav-username" class="text-sm font-semibold text-slate-700"></span>
+                            <span class="block text-xs text-slate-400 mt-0.5">Connected</span>
+                        </div>
+                        <button onclick="logout()" class="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors" title="Logout">
+                            <i class="fas fa-sign-out-alt"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Menu Overlay -->
+        <div id="menuOverlay" class="menu-overlay" onclick="toggleMenu()"></div>
+    `;
+
+    document.body.insertAdjacentHTML('afterbegin', menuHtml);
+}
+
+// Populate Menu Drawer
 async function injectNavbar(activePage) {
-    const navContainer = document.getElementById('navbar-placeholder');
-    if (!navContainer) return;
+    // First inject the drawer HTML
+    injectMenuDrawer();
+
+    const menuNav = document.getElementById('menuNav');
+    if (!menuNav) return;
 
     // Fetch user info first to check admin status
     let user = null;
@@ -129,43 +198,22 @@ async function injectNavbar(activePage) {
         links.push({ name: 'Admin', href: '/admin/console', icon: 'shield-alt' });
     }
 
-    const navHtml = `
-    <nav class="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-40">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex justify-between h-16">
-                <div class="flex items-center gap-8">
-                    <div class="flex-shrink-0 flex items-center gap-2">
-                        <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-indigo-200">
-                            <i class="fas fa-bolt text-sm"></i>
-                        </div>
-                        <span class="font-bold text-lg text-slate-800 tracking-tight">Torrent Manager</span>
-                    </div>
-                    <div class="hidden sm:flex sm:space-x-1">
-                        ${links.map(link => {
-                            const isActive = activePage === link.name;
-                            const activeClass = isActive 
-                                ? 'text-indigo-600 bg-indigo-50' 
-                                : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50';
-                            return `
-                            <a href="${link.href}" class="${activeClass} group inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200">
-                                <i class="fas fa-${link.icon} mr-2.5 ${isActive ? 'text-indigo-600' : 'text-slate-400 group-hover:text-slate-600'}"></i> ${link.name}
-                            </a>
-                            `;
-                        }).join('')}
-                    </div>
-                </div>
-                <div class="flex items-center gap-4">
-                    <div id="user-info" class="hidden md:flex flex-col items-end">
-                        <span id="nav-username" class="text-sm font-semibold text-slate-700 leading-none">${user ? user.username : ''}</span>
-                        <span class="text-xs text-slate-400 mt-1">Connected</span>
-                    </div>
-                    <button onclick="logout()" class="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-colors" title="Logout">
-                        <i class="fas fa-sign-out-alt"></i>
-                    </button>
-                </div>
-            </div>
-        </div>
-    </nav>
-    `;
-    navContainer.innerHTML = navHtml;
+    menuNav.innerHTML = links.map(link => {
+        const isActive = activePage === link.name;
+        const activeClass = isActive
+            ? 'text-indigo-600 bg-indigo-50'
+            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50';
+        return `
+        <a href="${link.href}" class="${activeClass} flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all">
+            <i class="fas fa-${link.icon} w-5 text-center ${isActive ? 'text-indigo-600' : 'text-slate-400'}"></i>
+            ${link.name}
+        </a>
+        `;
+    }).join('');
+
+    // Update username
+    const usernameEl = document.getElementById('nav-username');
+    if (usernameEl && user) {
+        usernameEl.textContent = user.username;
+    }
 }

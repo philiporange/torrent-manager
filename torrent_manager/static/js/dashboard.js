@@ -1,5 +1,47 @@
+/**
+ * Dashboard module for torrent management.
+ * Displays torrents in a table format with efficient DOM updates.
+ * Supports long-press/double-click to open management modal.
+ */
+
 let pollingEnabled = true;
 let servers = [];
+let torrentCache = {};  // Cache for efficient updates
+let torrentData = {};   // Full torrent data by hash
+let currentTorrent = null;  // Currently selected torrent for management modal
+let longPressTimer = null;
+const LONG_PRESS_DURATION = 500;  // ms
+
+// Intersection Observer for lazy rendering
+let rowObserver = null;
+function initRowObserver() {
+    if (rowObserver) return;
+    const scrollContainer = document.querySelector('#torrentsTableContainer > div');
+    if (!scrollContainer) return;
+
+    rowObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const row = entry.target;
+                const hash = row.dataset.hash;
+                if (row.dataset.rendered !== 'true' && torrentData[hash]) {
+                    updateRow(row, torrentData[hash]);
+                    row.dataset.rendered = 'true';
+                }
+            }
+        });
+    }, {
+        root: scrollContainer,
+        rootMargin: '200px 0px'  // Load rows 200px before they enter viewport
+    });
+}
+
+// Filter state
+let activeFilters = {
+    status: { download: true, seeding: true, finished: true },
+    privacy: { public: true, private: true },
+    server: ''
+};
 
 function formatDuration(seconds) {
     if (!seconds || seconds <= 0) return '0m';
@@ -9,29 +51,52 @@ function formatDuration(seconds) {
 }
 
 async function loadTorrents() {
-    const listEl = document.getElementById('torrentsList');
     const loadingEl = document.getElementById('loadingSpinner');
-    
-    // Only show spinner if list is empty (first load)
-    if (listEl.children.length === 0) loadingEl.classList.remove('hidden');
+    const emptyEl = document.getElementById('emptyState');
+    const tableEl = document.getElementById('torrentsTableContainer');
+    const tbody = document.getElementById('torrentsTbody');
+
+    // Show spinner only on first load
+    if (Object.keys(torrentCache).length === 0 && tbody.children.length === 0) {
+        loadingEl.classList.remove('hidden');
+    }
 
     try {
         const torrents = await apiRequest('/torrents');
         loadingEl.classList.add('hidden');
 
         // Update stats
-        let stats = { down: 0, up: 0, downTotal: 0, upTotal: 0, active: 0 };
-
+        let stats = { down: 0, up: 0, active: 0 };
         torrents.forEach(t => {
             stats.down += t.download_rate || 0;
             stats.up += t.upload_rate || 0;
-            stats.downTotal += t.downloaded || 0;
-            stats.upTotal += t.uploaded || 0;
             if (t.is_active) stats.active++;
         });
-
         updateGlobalStats(stats, torrents.length);
-        renderTorrentList(torrents, listEl);
+
+        // Show/hide empty state
+        if (torrents.length === 0) {
+            emptyEl.classList.remove('hidden');
+            tableEl.classList.add('hidden');
+            torrentCache = {};
+            return;
+        }
+
+        emptyEl.classList.add('hidden');
+        tableEl.classList.remove('hidden');
+
+        // Sort by added_at (newest first), fallback to name
+        torrents.sort((a, b) => {
+            const dateA = a.added_at ? new Date(a.added_at) : new Date(0);
+            const dateB = b.added_at ? new Date(b.added_at) : new Date(0);
+            return dateB - dateA;
+        });
+
+        // Apply filters
+        const filteredTorrents = filterTorrents(torrents);
+
+        // Efficient DOM update
+        updateTorrentTable(filteredTorrents, tbody);
 
     } catch (error) {
         loadingEl.classList.add('hidden');
@@ -41,8 +106,6 @@ async function loadTorrents() {
 function updateGlobalStats(stats, count) {
     document.getElementById('stat-down-speed').textContent = formatSpeed(stats.down);
     document.getElementById('stat-up-speed').textContent = formatSpeed(stats.up);
-    document.getElementById('stat-total-dl').textContent = formatBytes(stats.downTotal);
-    document.getElementById('stat-total-ul').textContent = formatBytes(stats.upTotal);
     document.getElementById('stat-count').textContent = count;
     document.getElementById('stat-active').textContent = stats.active;
 }
@@ -62,110 +125,472 @@ async function loadServerHttpStatus() {
     }
 }
 
-function renderTorrentList(torrents, container) {
-    if (torrents.length === 0) {
-        container.innerHTML = `
-            <div class="text-center py-12">
-                <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-slate-100 mb-4">
-                    <i class="fas fa-inbox text-slate-400 text-2xl"></i>
-                </div>
-                <h3 class="text-lg font-medium text-slate-900">No torrents active</h3>
-                <p class="mt-1 text-slate-500">Get started by adding a new download.</p>
+function updateTorrentTable(torrents, tbody) {
+    initRowObserver();
+    const newCache = {};
+    const existingRows = {};
+
+    // Store full torrent data for lazy rendering
+    torrents.forEach(t => {
+        torrentData[t.info_hash] = t;
+    });
+
+    // Index existing rows
+    for (const row of tbody.children) {
+        existingRows[row.dataset.hash] = row;
+    }
+
+    // Track order for reordering
+    const orderedHashes = torrents.map(t => t.info_hash);
+
+    torrents.forEach((t, index) => {
+        const hash = t.info_hash;
+        newCache[hash] = t;
+
+        let row = existingRows[hash];
+        if (row) {
+            // Update existing row only if rendered and data changed
+            if (row.dataset.rendered === 'true' && hasChanged(torrentCache[hash], t)) {
+                updateRow(row, t);
+            }
+            delete existingRows[hash];
+        } else {
+            // Create new placeholder row
+            row = createPlaceholderRow(t);
+            tbody.appendChild(row);
+            rowObserver.observe(row);
+        }
+    });
+
+    // Remove rows that no longer exist and clean up torrentData
+    for (const hash in existingRows) {
+        rowObserver.unobserve(existingRows[hash]);
+        existingRows[hash].remove();
+        delete torrentData[hash];
+    }
+
+    // Reorder rows to match sorted order
+    orderedHashes.forEach((hash, index) => {
+        const row = tbody.querySelector(`[data-hash="${hash}"]`);
+        if (row && tbody.children[index] !== row) {
+            tbody.insertBefore(row, tbody.children[index]);
+        }
+    });
+
+    torrentCache = newCache;
+}
+
+function hasChanged(oldData, newData) {
+    if (!oldData) return true;
+    return oldData.progress !== newData.progress ||
+           oldData.download_rate !== newData.download_rate ||
+           oldData.upload_rate !== newData.upload_rate ||
+           oldData.state !== newData.state ||
+           oldData.is_active !== newData.is_active;
+}
+
+function createPlaceholderRow(t) {
+    const row = document.createElement('tr');
+    row.dataset.hash = t.info_hash;
+    row.dataset.serverId = t.server_id;
+    row.dataset.rendered = 'false';
+    row.className = 'hover:bg-slate-50 cursor-pointer transition-colors';
+    row.style.height = '52px';  // Reserve space for the row
+
+    // Add interaction handlers
+    row.addEventListener('dblclick', () => openManagementModal(t.info_hash, t.server_id));
+    row.addEventListener('mousedown', (e) => startLongPress(e, t.info_hash, t.server_id));
+    row.addEventListener('mouseup', cancelLongPress);
+    row.addEventListener('mouseleave', cancelLongPress);
+    row.addEventListener('touchstart', (e) => startLongPress(e, t.info_hash, t.server_id), { passive: true });
+    row.addEventListener('touchend', cancelLongPress);
+    row.addEventListener('touchcancel', cancelLongPress);
+
+    // Empty placeholder cells matching table structure
+    row.innerHTML = `
+        <td class="px-4 py-3" colspan="6"></td>
+    `;
+    return row;
+}
+
+function getDisplayStatus(t) {
+    const isFinished = t.complete || t.state === 'finished' || t.progress >= 1;
+    if (isFinished) {
+        return t.is_active ? 'seeding' : 'finished';
+    }
+    return 'download';
+}
+
+function getStatusStyle(status) {
+    switch (status) {
+        case 'download': return 'text-indigo-600 bg-indigo-50';
+        case 'seeding': return 'text-amber-600 bg-amber-50';
+        case 'finished': return 'text-emerald-600 bg-emerald-50';
+        default: return 'text-slate-600 bg-slate-50';
+    }
+}
+
+function formatSeedRemaining(t) {
+    const threshold = t.seed_threshold || 0;
+    const duration = t.seeding_duration || 0;
+    const remaining = threshold - duration;
+
+    if (remaining <= 0) return '<span class="text-emerald-600">done</span>';
+
+    const hours = Math.ceil(remaining / 3600);
+    return `${hours}`;
+}
+
+function formatSizeGB(bytes) {
+    if (!bytes || bytes === 0) return '0';
+    const gb = bytes / (1024 * 1024 * 1024);
+    return gb >= 10 ? gb.toFixed(0) : gb.toFixed(1);
+}
+
+function formatSpeedMB(bytesPerSec) {
+    if (!bytesPerSec || bytesPerSec === 0) return '0';
+    const mb = bytesPerSec / (1024 * 1024);
+    return mb >= 10 ? mb.toFixed(0) : mb.toFixed(1);
+}
+
+function updateRow(row, t) {
+    const pct = Math.min(100, (t.progress || 0) * 100);
+    const status = getDisplayStatus(t);
+    const statusStyle = getStatusStyle(status);
+    const isComplete = t.complete || t.state === 'finished' || t.progress >= 1;
+
+    // Row background as progress bar
+    if (!isComplete && pct > 0) {
+        row.style.background = `linear-gradient(to right, rgba(187, 247, 208, 0.5) ${pct}%, transparent ${pct}%)`;
+    } else {
+        row.style.background = '';
+    }
+
+    // Combined speed display
+    const downSpeed = t.download_rate || 0;
+    const upSpeed = t.upload_rate || 0;
+    let speedDisplay = '';
+    if (downSpeed > 0 || upSpeed > 0) {
+        const parts = [];
+        if (downSpeed > 0) parts.push(`<i class="fas fa-arrow-down text-emerald-500"></i>${formatSpeedMB(downSpeed)}`);
+        if (upSpeed > 0) parts.push(`<i class="fas fa-arrow-up text-indigo-500"></i>${formatSpeedMB(upSpeed)}`);
+        speedDisplay = parts.join(' ');
+    } else {
+        speedDisplay = '<span class="text-slate-300">-</span>';
+    }
+
+    // Seed remaining
+    const seedRemaining = isComplete ? formatSeedRemaining(t) : '<span class="text-slate-300">-</span>';
+
+    row.innerHTML = `
+        <td class="px-4 py-3">
+            <div class="flex items-center gap-2 min-w-0">
+                <span class="truncate text-sm font-medium text-slate-900" title="${t.name || t.info_hash}">
+                    ${t.name || t.info_hash.substring(0, 16) + '...'}
+                </span>
+                ${t.is_private ? '<i class="fas fa-lock text-amber-500 text-xs flex-shrink-0" title="Private"></i>' : ''}
             </div>
-        `;
+        </td>
+        <td class="px-4 py-3">
+            <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${statusStyle}">${status}</span>
+        </td>
+        <td class="px-4 py-3 text-sm text-slate-600 hidden sm:table-cell">
+            ${formatSizeGB(t.size || 0)}
+        </td>
+        <td class="px-4 py-3 text-sm text-slate-600 hidden md:table-cell">
+            ${seedRemaining}
+        </td>
+        <td class="px-4 py-3 text-xs text-slate-500 hidden lg:table-cell truncate">
+            ${t.server_name || ''}
+        </td>
+        <td class="px-4 py-3 text-xs text-slate-600 hidden xl:table-cell">
+            ${speedDisplay}
+        </td>
+    `;
+}
+
+// Long press handling
+function startLongPress(e, hash, serverId) {
+    cancelLongPress();
+    longPressTimer = setTimeout(() => {
+        openManagementModal(hash, serverId);
+    }, LONG_PRESS_DURATION);
+}
+
+function cancelLongPress() {
+    if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+    }
+}
+
+// Management Drawer
+async function openManagementModal(hash, serverId) {
+    const t = torrentData[hash];
+    if (!t) return;
+
+    currentTorrent = { hash, serverId };
+
+    document.getElementById('managementDrawer').classList.add('open');
+    document.getElementById('managementOverlay').classList.add('active');
+
+    // Header
+    document.getElementById('managementTitle').textContent = t.name || hash;
+    document.getElementById('mgmtInfoHash').textContent = hash;
+
+    // Row 1: Status, Progress, Size, Downloaded, Uploaded, Ratio
+    document.getElementById('mgmtStatus').textContent = getDisplayStatus(t);
+    document.getElementById('mgmtProgress').textContent = ((t.progress || 0) * 100).toFixed(1) + '%';
+    document.getElementById('mgmtSize').textContent = formatBytes(t.size || 0);
+    document.getElementById('mgmtDownloaded').textContent = formatBytes(t.downloaded || 0);
+    document.getElementById('mgmtUploaded').textContent = formatBytes(t.uploaded || 0);
+    document.getElementById('mgmtRatio').textContent = (t.ratio || 0).toFixed(2);
+
+    // Row 2: Down Speed, Up Speed, Peers, Seeds, Added, Server
+    document.getElementById('mgmtDownSpeed').textContent = formatSpeed(t.download_rate || 0);
+    document.getElementById('mgmtUpSpeed').textContent = formatSpeed(t.upload_rate || 0);
+    document.getElementById('mgmtPeers').textContent = t.peers || 0;
+    document.getElementById('mgmtSeeds').textContent = t.seeds || 0;
+    document.getElementById('mgmtAdded').textContent = t.added_at ? new Date(t.added_at).toLocaleDateString() : '-';
+    document.getElementById('mgmtServer').textContent = t.server_name || '-';
+
+    // Update button visibility
+    document.getElementById('mgmtStartBtn').classList.toggle('hidden', t.is_active);
+    document.getElementById('mgmtStopBtn').classList.toggle('hidden', !t.is_active);
+
+    // Load files
+    const filesList = document.getElementById('managementFilesList');
+    filesList.innerHTML = '<div class="text-center py-6"><i class="fas fa-circle-notch fa-spin text-indigo-500"></i></div>';
+
+    try {
+        const data = await apiRequest(`/torrents/${hash}/files?server_id=${serverId}`);
+        renderManagementFiles(data);
+    } catch (error) {
+        filesList.innerHTML = '<div class="text-center py-6 text-slate-400">Unable to load files</div>';
+    }
+}
+
+// Media file detection
+const AUDIO_EXTENSIONS = ['mp3', 'm4a', 'm4b', 'wav', 'ogg', 'flac', 'aac'];
+const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mkv', 'avi', 'mov', 'm4v'];
+
+function getMediaType(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    if (AUDIO_EXTENSIONS.includes(ext)) return 'audio';
+    if (VIDEO_EXTENSIONS.includes(ext)) return 'video';
+    return null;
+}
+
+function renderManagementFiles(data) {
+    const container = document.getElementById('managementFilesList');
+    const files = data.files || [];
+
+    if (files.length === 0) {
+        container.innerHTML = '<div class="text-center py-6 text-slate-400">No files</div>';
         return;
     }
 
-    // Determine if we need to re-render everything or update (simple re-render for now)
-    container.innerHTML = torrents.map(t => {
-        const pct = (t.progress * 100).toFixed(1);
-        const isFinished = t.complete || t.state === 'finished';
-        const statusColor = isFinished ? 'text-emerald-600 bg-emerald-50' : 'text-indigo-600 bg-indigo-50';
-        const barColor = isFinished ? 'bg-emerald-500' : 'bg-indigo-500';
-        const httpEnabled = serverHttpStatus[t.server_id] || false;
+    container.innerHTML = files.map(f => {
+        const size = formatBytes(f.size || 0);
+        const filename = f.path.split('/').pop() || f.path;
+        const progress = ((f.progress || 0) * 100).toFixed(0);
+        const mediaType = getMediaType(filename);
+        const canPlay = data.http_enabled && f.download_url && mediaType;
 
         return `
-        <div class="bg-white rounded-xl border border-slate-200 p-5 hover:shadow-md transition-shadow duration-200">
-            <div class="flex justify-between items-start mb-4">
-                <div class="flex-1 min-w-0 mr-4">
-                    <div class="flex items-center gap-2 mb-1">
-                        <h3 class="text-base font-semibold text-slate-900 truncate" title="${t.name || t.info_hash}">
-                            ${t.name || t.info_hash}
-                        </h3>
-                    </div>
-                    <div class="flex items-center gap-2 text-xs">
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium ${statusColor}">
-                            ${t.state || 'unknown'}
-                        </span>
-                        ${t.is_private ? `
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium text-amber-600 bg-amber-50 border border-amber-200">
-                            <i class="fas fa-lock mr-1"></i> Private
-                        </span>
-                        ` : ''}
-                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full font-medium text-slate-600 bg-slate-100 border border-slate-200">
-                            <i class="fas fa-server mr-1 text-slate-400"></i> ${t.server_name}
-                        </span>
-                    </div>
+            <div class="flex items-center gap-3 px-3 py-2 hover:bg-slate-50">
+                <i class="fas fa-file text-slate-300"></i>
+                <div class="flex-1 min-w-0">
+                    <div class="truncate text-sm text-slate-700" title="${f.path}">${filename}</div>
                 </div>
-
-                <div class="flex items-center gap-2">
-                    ${httpEnabled ? `
-                        <button onclick="viewTorrentFiles('${t.info_hash}', '${t.server_id}')" class="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="View Files">
-                            <i class="fas fa-folder-open"></i>
-                        </button>
-                    ` : ''}
-                    ${t.is_active ? `
-                        <button onclick="stopTorrent('${t.info_hash}', '${t.server_id}')" class="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition-colors" title="Pause">
-                            <i class="fas fa-pause"></i>
-                        </button>
-                    ` : `
-                        <button onclick="startTorrent('${t.info_hash}', '${t.server_id}')" class="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors" title="Resume">
-                            <i class="fas fa-play"></i>
-                        </button>
-                    `}
-                    <button onclick="removeTorrent('${t.info_hash}', '${t.server_id}')" class="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors" title="Remove">
-                        <i class="fas fa-trash"></i>
+                <span class="text-xs text-slate-400">${size}</span>
+                <span class="text-xs text-slate-400 w-10 text-right">${progress}%</span>
+                ${canPlay ? `
+                    <button onclick="playMedia('${API_BASE}${f.download_url}', '${mediaType}', '${filename.replace(/'/g, "\\'")}')" class="text-emerald-500 hover:text-emerald-700">
+                        <i class="fas fa-play"></i>
                     </button>
-                </div>
+                ` : ''}
+                ${data.http_enabled && f.download_url ? `
+                    <a href="${API_BASE}${f.download_url}" class="text-indigo-500 hover:text-indigo-700" download>
+                        <i class="fas fa-download"></i>
+                    </a>
+                ` : ''}
             </div>
-
-            <div class="relative w-full h-2 bg-slate-100 rounded-full overflow-hidden mb-4">
-                <div class="absolute top-0 left-0 h-full ${barColor} transition-all duration-500" style="width: ${pct}%"></div>
-            </div>
-
-            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm text-slate-500">
-                <div class="flex items-center gap-2">
-                    <i class="fas fa-chart-pie text-slate-400"></i>
-                    <span class="font-medium text-slate-700">${pct}%</span>
-                </div>
-                <div class="flex items-center gap-2">
-                    <i class="fas fa-arrow-down text-slate-400"></i>
-                    <span>${formatSpeed(t.download_rate || 0)}</span>
-                </div>
-                <div class="flex items-center gap-2">
-                    <i class="fas fa-arrow-up text-slate-400"></i>
-                    <span>${formatSpeed(t.upload_rate || 0)}</span>
-                </div>
-                <div class="flex items-center gap-2">
-                    <i class="fas fa-database text-slate-400"></i>
-                    <span>${formatBytes(t.size || 0)}</span>
-                </div>
-            </div>
-            ${isFinished ? `
-            <div class="flex items-center gap-2 mt-3 pt-3 border-t border-slate-100 text-sm text-slate-500">
-                <i class="fas fa-seedling ${t.seeding_duration >= t.seed_threshold ? 'text-emerald-500' : 'text-slate-400'}"></i>
-                <span>Seeded: ${formatDuration(t.seeding_duration)} / ${formatDuration(t.seed_threshold)}</span>
-                <div class="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden ml-2">
-                    <div class="h-full ${t.seeding_duration >= t.seed_threshold ? 'bg-emerald-500' : 'bg-indigo-500'} transition-all duration-500"
-                         style="width: ${Math.min(100, (t.seeding_duration / t.seed_threshold) * 100)}%"></div>
-                </div>
-            </div>
-            ` : ''}
-        </div>
         `;
     }).join('');
 }
 
+// Media player - fullscreen with preload for seeking support
+function playMedia(url, type, filename) {
+    let player = document.getElementById('mediaPlayerModal');
+    if (!player) {
+        player = document.createElement('div');
+        player.id = 'mediaPlayerModal';
+        player.className = 'fixed inset-0 z-[100] hidden bg-black';
+        player.dataset.minimized = 'false';
+        player.innerHTML = `
+            <div class="absolute top-4 right-4 z-10 flex gap-2">
+                <button onclick="toggleMinimizePlayer()" id="minimizePlayerBtn" class="w-12 h-12 flex items-center justify-center text-white/70 hover:text-white bg-black/50 rounded-full transition-all">
+                    <i class="fas fa-compress-alt text-xl"></i>
+                </button>
+                <button onclick="closeMediaPlayer()" class="w-12 h-12 flex items-center justify-center text-white/70 hover:text-white bg-black/50 rounded-full transition-all">
+                    <i class="fas fa-times text-2xl"></i>
+                </button>
+            </div>
+            <div id="mediaPlayerContent" class="w-full h-full flex items-center justify-center"></div>
+        `;
+        document.body.appendChild(player);
+    }
+
+    const content = document.getElementById('mediaPlayerContent');
+    const ext = filename.split('.').pop().toLowerCase();
+
+    // Determine MIME type
+    let mimeType = '';
+    if (type === 'audio') {
+        if (ext === 'm4b' || ext === 'm4a') mimeType = 'audio/mp4';
+        else if (ext === 'mp3') mimeType = 'audio/mpeg';
+        else if (ext === 'ogg') mimeType = 'audio/ogg';
+        else if (ext === 'wav') mimeType = 'audio/wav';
+        else if (ext === 'flac') mimeType = 'audio/flac';
+        else if (ext === 'aac') mimeType = 'audio/aac';
+    } else {
+        if (ext === 'mp4' || ext === 'm4v') mimeType = 'video/mp4';
+        else if (ext === 'webm') mimeType = 'video/webm';
+        else if (ext === 'mkv') mimeType = 'video/x-matroska';
+        else if (ext === 'avi') mimeType = 'video/x-msvideo';
+        else if (ext === 'mov') mimeType = 'video/quicktime';
+    }
+
+    if (type === 'audio') {
+        content.innerHTML = `
+            <div class="w-full max-w-2xl px-8">
+                <div class="text-white text-center mb-6 text-lg truncate">${filename}</div>
+                <audio id="mediaElement" controls preload="auto" class="w-full">
+                    <source src="${url}" type="${mimeType}">
+                </audio>
+                <div class="flex items-center justify-center gap-2 mt-4">
+                    <span class="text-white/60 text-sm mr-2">Speed:</span>
+                    <button onclick="setPlaybackSpeed(1)" class="px-3 py-1 text-sm text-white bg-white/20 rounded transition-colors">1x</button>
+                    <button onclick="setPlaybackSpeed(1.2)" class="px-3 py-1 text-sm text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded transition-colors">1.2x</button>
+                    <button onclick="setPlaybackSpeed(1.5)" class="px-3 py-1 text-sm text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded transition-colors">1.5x</button>
+                    <button onclick="setPlaybackSpeed(2)" class="px-3 py-1 text-sm text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded transition-colors">2x</button>
+                    <button onclick="setPlaybackSpeed(2.5)" class="px-3 py-1 text-sm text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded transition-colors">2.5x</button>
+                    <button onclick="setPlaybackSpeed(3)" class="px-3 py-1 text-sm text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded transition-colors">3x</button>
+                    <button onclick="setPlaybackSpeed(3.5)" class="px-3 py-1 text-sm text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded transition-colors">3.5x</button>
+                </div>
+            </div>
+        `;
+    } else {
+        content.innerHTML = `
+            <video id="mediaElement" controls preload="auto" class="max-w-full max-h-full w-full h-full object-contain">
+                <source src="${url}" type="${mimeType}">
+            </video>
+        `;
+    }
+
+    // Reset to fullscreen and show
+    player.className = 'fixed inset-0 z-[100] bg-black';
+    player.dataset.minimized = 'false';
+    const minimizeIcon = player.querySelector('#minimizePlayerBtn i');
+    if (minimizeIcon) minimizeIcon.className = 'fas fa-compress-alt text-xl';
+
+}
+
+function closeMediaPlayer() {
+    const player = document.getElementById('mediaPlayerModal');
+    if (player) {
+        const media = player.querySelector('audio, video');
+        if (media) {
+            media.pause();
+            media.removeAttribute('src');
+            media.load();
+        }
+        player.classList.add('hidden');
+        // Reset to fullscreen state
+        player.className = 'fixed inset-0 z-[100] hidden bg-black';
+        player.dataset.minimized = 'false';
+        const icon = player.querySelector('#minimizePlayerBtn i');
+        if (icon) icon.className = 'fas fa-compress-alt text-xl';
+    }
+}
+
+function setPlaybackSpeed(speed) {
+    const media = document.getElementById('mediaElement');
+    if (media) {
+        media.playbackRate = speed;
+        // Update button styles
+        const buttons = document.querySelectorAll('#mediaPlayerContent button[onclick^="setPlaybackSpeed"]');
+        buttons.forEach(btn => {
+            const btnSpeed = parseFloat(btn.textContent);
+            if (btnSpeed === speed) {
+                btn.classList.remove('text-white/80', 'bg-white/10');
+                btn.classList.add('text-white', 'bg-white/20');
+            } else {
+                btn.classList.remove('text-white', 'bg-white/20');
+                btn.classList.add('text-white/80', 'bg-white/10');
+            }
+        });
+    }
+}
+
+function toggleMinimizePlayer() {
+    const player = document.getElementById('mediaPlayerModal');
+    if (!player) return;
+
+    const isMinimized = player.dataset.minimized === 'true';
+    const btn = document.getElementById('minimizePlayerBtn');
+    const icon = btn.querySelector('i');
+
+    if (isMinimized) {
+        // Expand
+        player.className = 'fixed inset-0 z-[100] bg-black';
+        player.dataset.minimized = 'false';
+        icon.className = 'fas fa-compress-alt text-xl';
+    } else {
+        // Minimize to bottom-right corner
+        player.className = 'fixed bottom-20 right-4 z-[100] bg-black/95 rounded-lg shadow-2xl w-80 overflow-hidden';
+        player.dataset.minimized = 'true';
+        icon.className = 'fas fa-expand-alt text-xl';
+    }
+}
+
+function closeManagementModal() {
+    document.getElementById('managementDrawer').classList.remove('open');
+    document.getElementById('managementOverlay').classList.remove('active');
+    currentTorrent = null;
+}
+
+// Management actions
+async function mgmtStart() {
+    if (!currentTorrent) return;
+    await startTorrent(currentTorrent.hash, currentTorrent.serverId);
+    closeManagementModal();
+}
+
+async function mgmtStop() {
+    if (!currentTorrent) return;
+    await stopTorrent(currentTorrent.hash, currentTorrent.serverId);
+    closeManagementModal();
+}
+
+function mgmtDelete() {
+    if (!currentTorrent) return;
+    document.getElementById('deleteConfirmModal').classList.remove('hidden');
+}
+
+function closeDeleteConfirm() {
+    document.getElementById('deleteConfirmModal').classList.add('hidden');
+}
+
+async function confirmDelete() {
+    if (!currentTorrent) return;
+    closeDeleteConfirm();
+    await removeTorrent(currentTorrent.hash, currentTorrent.serverId);
+    closeManagementModal();
+}
+
+// Server modal helpers
 async function loadServersForModal() {
     try {
         servers = await apiRequest('/servers');
@@ -177,14 +602,20 @@ async function loadServersForModal() {
             opt.textContent = `${s.name} (${s.server_type})`;
             select.appendChild(opt);
         });
-        
-        if (servers.length === 1) select.value = servers[0].id;
+
+        // Auto-select: default server, or first server
+        const defaultServer = servers.find(s => s.is_default);
+        if (defaultServer) {
+            select.value = defaultServer.id;
+        } else if (servers.length > 0) {
+            select.value = servers[0].id;
+        }
     } catch (error) {
         // Error
     }
 }
 
-// Actions
+// Torrent actions
 async function startTorrent(hash, serverId) {
     const query = serverId ? `?server_id=${serverId}` : '';
     await apiRequest(`/torrents/${hash}/start${query}`, { method: 'POST' });
@@ -200,25 +631,9 @@ async function stopTorrent(hash, serverId) {
 }
 
 async function removeTorrent(hash, serverId) {
-    if (confirm('Are you sure? This will remove the torrent from the list.')) {
-        const query = serverId ? `?server_id=${serverId}` : '';
-        await apiRequest(`/torrents/${hash}${query}`, { method: 'DELETE' });
-        showToast('Torrent removed');
-        loadTorrents();
-    }
-}
-
-async function addMagnet(event) {
-    event.preventDefault();
-    const uri = document.getElementById('magnetInput').value.trim();
-    const server_id = document.getElementById('targetServer').value;
-    
-    if (!server_id) { showToast('Please select a server', 'danger'); return; }
-    if (!uri) return;
-
-    await apiRequest('/torrents', { method: 'POST', body: JSON.stringify({ uri, server_id }) });
-    showToast('Torrent added successfully');
-    document.getElementById('addModal').close(); // Helper function needed for modal closing
+    const query = serverId ? `?server_id=${serverId}` : '';
+    await apiRequest(`/torrents/${hash}${query}`, { method: 'DELETE' });
+    showToast('Torrent removed');
     loadTorrents();
 }
 
@@ -241,97 +656,115 @@ async function addTorrentFile(file) {
         return;
     }
 
-    showToast('Torrent uploaded successfully');
+    showToast('Torrent uploaded');
     closeModal('addModal');
     loadTorrents();
 }
 
-
-// Modal Helpers (Tailwind)
+// Modal helpers
 function openModal(id) {
     document.getElementById(id).classList.remove('hidden');
     loadServersForModal();
 }
+
 function closeModal(id) {
     document.getElementById(id).classList.add('hidden');
 }
 
-// Torrent Files Modal
-let currentTorrentInfo = null;
+// Filter functions
+function openFilterModal() {
+    // Populate server dropdown
+    const serverSelect = document.getElementById('filterServer');
+    serverSelect.innerHTML = '<option value="">All Servers</option>';
+    servers.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.name;
+        if (activeFilters.server === s.id) opt.selected = true;
+        serverSelect.appendChild(opt);
+    });
 
-async function viewTorrentFiles(infoHash, serverId) {
-    currentTorrentInfo = { infoHash, serverId };
-    document.getElementById('torrentFilesModal').classList.remove('hidden');
-    document.getElementById('torrentFilesList').innerHTML = `<div class="text-center py-8"><i class="fas fa-circle-notch fa-spin text-indigo-500 text-2xl"></i></div>`;
+    // Set checkbox states
+    document.getElementById('filterDownload').checked = activeFilters.status.download;
+    document.getElementById('filterSeeding').checked = activeFilters.status.seeding;
+    document.getElementById('filterFinished').checked = activeFilters.status.finished;
+    document.getElementById('filterPublic').checked = activeFilters.privacy.public;
+    document.getElementById('filterPrivate').checked = activeFilters.privacy.private;
 
-    try {
-        const data = await apiRequest(`/torrents/${infoHash}/files?server_id=${serverId}`);
-        document.getElementById('torrentFilesTitle').textContent = data.name || infoHash;
-        renderTorrentFilesList(data);
-    } catch (error) {
-        document.getElementById('torrentFilesList').innerHTML = `<div class="text-center py-8 text-rose-500">Failed to load files</div>`;
-    }
+    document.getElementById('filterModal').classList.remove('hidden');
 }
 
-function closeTorrentFilesModal() {
-    document.getElementById('torrentFilesModal').classList.add('hidden');
+function closeFilterModal() {
+    document.getElementById('filterModal').classList.add('hidden');
 }
 
-function renderTorrentFilesList(data) {
-    const container = document.getElementById('torrentFilesList');
-    const files = data.files || [];
+function applyFilters() {
+    activeFilters.status.download = document.getElementById('filterDownload').checked;
+    activeFilters.status.seeding = document.getElementById('filterSeeding').checked;
+    activeFilters.status.finished = document.getElementById('filterFinished').checked;
+    activeFilters.privacy.public = document.getElementById('filterPublic').checked;
+    activeFilters.privacy.private = document.getElementById('filterPrivate').checked;
+    activeFilters.server = document.getElementById('filterServer').value;
 
-    if (files.length === 0) {
-        container.innerHTML = `<div class="text-center py-8 text-slate-500">No files found</div>`;
-        return;
-    }
+    closeFilterModal();
+    loadTorrents();
+}
 
-    container.innerHTML = files.map(f => {
-        const progress = ((f.progress || 0) * 100).toFixed(1);
-        const size = formatBytes(f.size || 0);
-        const filename = f.path.split('/').pop() || f.path;
+function resetFilters() {
+    activeFilters = {
+        status: { download: true, seeding: true, finished: true },
+        privacy: { public: true, private: true },
+        server: ''
+    };
+    applyFilters();
+}
 
-        return `
-            <div class="flex items-center gap-3 p-3 hover:bg-slate-50 rounded-lg transition-colors">
-                <i class="fas fa-file text-slate-400 text-lg"></i>
-                <div class="flex-1 min-w-0">
-                    <div class="truncate text-sm font-medium text-slate-900" title="${f.path}">${filename}</div>
-                    <div class="text-xs text-slate-500">${f.path}</div>
-                </div>
-                <div class="text-sm text-slate-500">${size}</div>
-                <div class="text-sm text-slate-500">${progress}%</div>
-                ${data.http_enabled && f.download_url ? `
-                    <a href="${API_BASE}${f.download_url}"
-                       class="px-3 py-1.5 text-sm font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors"
-                       download>
-                        <i class="fas fa-download"></i>
-                    </a>
-                ` : ''}
-            </div>
-        `;
-    }).join('');
+function filterTorrents(torrents) {
+    return torrents.filter(t => {
+        const status = getDisplayStatus(t);
+
+        // Status filter
+        if (!activeFilters.status[status]) return false;
+
+        // Privacy filter
+        if (t.is_private && !activeFilters.privacy.private) return false;
+        if (!t.is_private && !activeFilters.privacy.public) return false;
+
+        // Server filter
+        if (activeFilters.server && t.server_id !== activeFilters.server) return false;
+
+        return true;
+    });
 }
 
 // Initialization
 document.addEventListener('DOMContentLoaded', async () => {
     injectNavbar('Torrents');
 
+    // Show filter button in menu (torrents page only)
+    const filterBtn = document.getElementById('menuFilterBtn');
+    if (filterBtn) filterBtn.classList.remove('hidden');
+
     const user = await checkAuth();
     if (user) {
         await loadServerHttpStatus();
+        // Load servers for filter dropdown
+        try {
+            servers = await apiRequest('/servers');
+        } catch (e) {}
         loadTorrents();
         setInterval(() => {
             if (pollingEnabled && !document.hidden) loadTorrents();
-        }, 2000);
+        }, 15000);
     }
 
-    // Event Listeners
+    // Add magnet form
     document.getElementById('addMagnetForm').addEventListener('submit', async e => {
         e.preventDefault();
         const uri = document.getElementById('magnetInput').value.trim();
         const server_id = document.getElementById('targetServer').value;
         if (!server_id) { showToast('Select a server', 'danger'); return; }
-        
+
         await apiRequest('/torrents', { method: 'POST', body: JSON.stringify({ uri, server_id }) });
         showToast('Torrent added');
         closeModal('addModal');
@@ -346,7 +779,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('fileInput').addEventListener('change', e => {
             if (e.target.files[0]) addTorrentFile(e.target.files[0]);
         });
-        
+
         dropZone.addEventListener('dragover', e => {
             e.preventDefault();
             dropZone.classList.add('border-indigo-500', 'bg-indigo-50');

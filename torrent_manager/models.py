@@ -44,6 +44,7 @@ class TorrentServer(BaseModel):
     rpc_path = CharField(null=True)  # For rTorrent (e.g., "/RPC2")
     use_ssl = BooleanField(default=False)  # Use HTTPS instead of HTTP
     enabled = BooleanField(default=True)
+    is_default = BooleanField(default=False)  # Default server for adding torrents
     created_at = DateTimeField(default=datetime.datetime.now)
     # HTTP download server configuration (nginx autoindex)
     http_host = CharField(null=True)  # HTTP server host (defaults to main host if not set)
