@@ -251,19 +251,22 @@ class RTorrentClient(BaseTorrentClient):
             item["is_active"] = item["is_active"] == 1
             item["complete"] = item["complete"] == 1
             item["is_private"] = item["is_private"] == 1
-            
-            info_hash = item["info_hash"]
+
+            item_hash = item["info_hash"]
             name = item["name"]
-            item['is_magnet'] = name == f"{info_hash}.meta"
+            item['is_magnet'] = name == f"{item_hash}.meta"
             item["progress"] = item["bytes_done"] / item["size"] if item["size"] > 0 else 0
 
             if item["is_multi_file"]:
                 item["directory"] = os.path.dirname(item["base_path"])
 
             if files:
-                item["files"] = list(self.files(info_hash))
+                item["files"] = list(self.files(item_hash))
 
         for item in items:
+            # Filter by info_hash if one was provided
+            if info_hash and item["info_hash"].upper() != info_hash.upper():
+                continue
             yield item
 
     def get_torrent(self, info_hash) -> Generator[Dict[str, Any], None, None]:
