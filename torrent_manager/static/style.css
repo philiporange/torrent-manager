@@ -307,3 +307,40 @@ body {
 .floating-btn:hover {
     opacity: 1;
 }
+
+/* Media Player - Plyr Customizations */
+#mediaPlayerModal .plyr {
+    width: 100%;
+    height: 100%;
+}
+
+#mediaPlayerModal .plyr--video {
+    height: 100%;
+}
+
+#mediaPlayerModal .plyr__video-wrapper {
+    height: 100%;
+}
+
+#mediaPlayerModal .plyr video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+#mediaPlayerModal .plyr--audio {
+    width: 100%;
+}
+
+#mediaPlayerModal .plyr__controls {
+    background: rgba(0, 0, 0, 0.7) !important;
+    padding: 15px !important;
+}
+
+#mediaPlayerModal .plyr__control {
+    color: white !important;
+}
+
+#mediaPlayerModal .plyr__control:hover {
+    background: rgba(255, 255, 255, 0.2) !important;
+}

@@ -1,7 +1,9 @@
 /**
  * Dashboard module for torrent management.
  * Displays torrents in a table format with efficient DOM updates.
+ * Uses Intersection Observer for lazy row rendering.
  * Supports long-press/double-click to open management modal.
+ * Media player (Plyr) is lazy-loaded only when first used.
  */
 
 let pollingEnabled = true;
@@ -420,8 +422,41 @@ function renderManagementFiles(data) {
     }).join('');
 }
 
-// Media player - fullscreen with preload for seeking support
-function playMedia(url, type, filename) {
+// Media player - Plyr-based fullscreen player
+let plyrInstance = null;
+let plyrLoaded = false;
+
+async function loadPlyr() {
+    if (plyrLoaded) return;
+
+    // Load CSS
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = '/static/vendor/plyr.css';
+    document.head.appendChild(link);
+
+    // Load JS
+    await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = '/static/vendor/plyr.polyfilled.js';
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+    });
+
+    plyrLoaded = true;
+}
+
+async function playMedia(url, type, filename) {
+    // Load Plyr on first use
+    await loadPlyr();
+
+    // Destroy existing Plyr instance
+    if (plyrInstance) {
+        plyrInstance.destroy();
+        plyrInstance = null;
+    }
+
     let player = document.getElementById('mediaPlayerModal');
     if (!player) {
         player = document.createElement('div');
@@ -429,7 +464,7 @@ function playMedia(url, type, filename) {
         player.className = 'fixed inset-0 z-[100] hidden bg-black';
         player.dataset.minimized = 'false';
         player.innerHTML = `
-            <div class="absolute top-4 right-4 z-10 flex gap-2">
+            <div id="mediaPlayerControls" class="absolute top-4 right-4 z-20 flex gap-2 opacity-0 transition-opacity duration-300">
                 <button onclick="toggleMinimizePlayer()" id="minimizePlayerBtn" class="w-12 h-12 flex items-center justify-center text-white/70 hover:text-white bg-black/50 rounded-full transition-all">
                     <i class="fas fa-compress-alt text-xl"></i>
                 </button>
@@ -440,6 +475,27 @@ function playMedia(url, type, filename) {
             <div id="mediaPlayerContent" class="w-full h-full flex items-center justify-center"></div>
         `;
         document.body.appendChild(player);
+
+        // Show controls on interaction
+        let hideTimeout = null;
+        const showControls = () => {
+            const controls = document.getElementById('mediaPlayerControls');
+            if (controls) {
+                controls.classList.remove('opacity-0');
+                controls.classList.add('opacity-100');
+            }
+            clearTimeout(hideTimeout);
+            hideTimeout = setTimeout(() => {
+                const ctrl = document.getElementById('mediaPlayerControls');
+                if (ctrl) {
+                    ctrl.classList.remove('opacity-100');
+                    ctrl.classList.add('opacity-0');
+                }
+            }, 2500);
+        };
+        player.addEventListener('mousemove', showControls);
+        player.addEventListener('touchstart', showControls);
+        player.addEventListener('click', showControls);
     }
 
     const content = document.getElementById('mediaPlayerContent');
@@ -465,10 +521,24 @@ function playMedia(url, type, filename) {
     if (type === 'audio') {
         content.innerHTML = `
             <div class="w-full max-w-2xl px-8">
-                <div class="text-white text-center mb-6 text-lg truncate">${filename}</div>
-                <audio id="mediaElement" controls preload="auto" class="w-full">
+                <div class="text-white text-center mb-4 text-lg truncate">${filename}</div>
+                <audio id="mediaElement" preload="metadata">
                     <source src="${url}" type="${mimeType}">
                 </audio>
+                <div class="flex items-center justify-center gap-3 mt-6">
+                    <button onclick="mediaSkip(-30)" class="w-10 h-10 flex items-center justify-center text-white/70 hover:text-white bg-white/10 hover:bg-white/20 rounded-full transition-colors" title="Back 30s">
+                        <i class="fas fa-undo"></i>
+                    </button>
+                    <button onclick="mediaSkip(-10)" class="w-10 h-10 flex items-center justify-center text-white/70 hover:text-white bg-white/10 hover:bg-white/20 rounded-full transition-colors" title="Back 10s">
+                        <i class="fas fa-backward"></i>
+                    </button>
+                    <button onclick="mediaSkip(10)" class="w-10 h-10 flex items-center justify-center text-white/70 hover:text-white bg-white/10 hover:bg-white/20 rounded-full transition-colors" title="Forward 10s">
+                        <i class="fas fa-forward"></i>
+                    </button>
+                    <button onclick="mediaSkip(30)" class="w-10 h-10 flex items-center justify-center text-white/70 hover:text-white bg-white/10 hover:bg-white/20 rounded-full transition-colors" title="Forward 30s">
+                        <i class="fas fa-redo"></i>
+                    </button>
+                </div>
                 <div class="flex items-center justify-center gap-2 mt-4">
                     <span class="text-white/60 text-sm mr-2">Speed:</span>
                     <button onclick="setPlaybackSpeed(1)" class="px-3 py-1 text-sm text-white bg-white/20 rounded transition-colors">1x</button>
@@ -483,7 +553,7 @@ function playMedia(url, type, filename) {
         `;
     } else {
         content.innerHTML = `
-            <video id="mediaElement" controls preload="auto" class="max-w-full max-h-full w-full h-full object-contain">
+            <video id="mediaElement" preload="metadata" playsinline webkit-playsinline class="w-full h-full">
                 <source src="${url}" type="${mimeType}">
             </video>
         `;
@@ -495,9 +565,40 @@ function playMedia(url, type, filename) {
     const minimizeIcon = player.querySelector('#minimizePlayerBtn i');
     if (minimizeIcon) minimizeIcon.className = 'fas fa-compress-alt text-xl';
 
+    // Initialize Plyr
+    const mediaEl = document.getElementById('mediaElement');
+    if (mediaEl && typeof Plyr !== 'undefined') {
+        plyrInstance = new Plyr(mediaEl, {
+            controls: type === 'audio'
+                ? ['play', 'progress', 'current-time', 'duration', 'mute', 'volume']
+                : ['play-large', 'play', 'progress', 'current-time', 'duration', 'mute', 'volume', 'settings', 'fullscreen'],
+            settings: ['speed'],
+            speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3] },
+            keyboard: { focused: true, global: false },
+            tooltips: { controls: true, seek: true },
+            fullscreen: { enabled: true, fallback: true, iosNative: true }
+        });
+    }
+
+    // Reset speed to 1x for new media
+    setPlaybackSpeed(1);
+
+    // Autoplay
+    if (plyrInstance) {
+        plyrInstance.play();
+    }
+
+    // Setup keyboard controls
+    setupMediaListeners();
 }
 
 function closeMediaPlayer() {
+    // Destroy Plyr instance first
+    if (plyrInstance) {
+        plyrInstance.destroy();
+        plyrInstance = null;
+    }
+
     const player = document.getElementById('mediaPlayerModal');
     if (player) {
         const media = player.querySelector('audio, video');
@@ -513,25 +614,108 @@ function closeMediaPlayer() {
         const icon = player.querySelector('#minimizePlayerBtn i');
         if (icon) icon.className = 'fas fa-compress-alt text-xl';
     }
+    // Clean up keyboard handler
+    if (mediaKeyHandler) {
+        document.removeEventListener('keydown', mediaKeyHandler);
+        mediaKeyHandler = null;
+    }
 }
 
 function setPlaybackSpeed(speed) {
-    const media = document.getElementById('mediaElement');
-    if (media) {
-        media.playbackRate = speed;
-        // Update button styles
-        const buttons = document.querySelectorAll('#mediaPlayerContent button[onclick^="setPlaybackSpeed"]');
-        buttons.forEach(btn => {
-            const btnSpeed = parseFloat(btn.textContent);
-            if (btnSpeed === speed) {
-                btn.classList.remove('text-white/80', 'bg-white/10');
-                btn.classList.add('text-white', 'bg-white/20');
-            } else {
-                btn.classList.remove('text-white', 'bg-white/20');
-                btn.classList.add('text-white/80', 'bg-white/10');
-            }
-        });
+    if (plyrInstance) {
+        plyrInstance.speed = speed;
     }
+    // Update button styles
+    const buttons = document.querySelectorAll('#mediaPlayerContent button[onclick^="setPlaybackSpeed"]');
+    buttons.forEach(btn => {
+        const btnSpeed = parseFloat(btn.textContent);
+        if (btnSpeed === speed) {
+            btn.classList.remove('text-white/80', 'bg-white/10');
+            btn.classList.add('text-white', 'bg-white/20');
+        } else {
+            btn.classList.remove('text-white', 'bg-white/20');
+            btn.classList.add('text-white/80', 'bg-white/10');
+        }
+    });
+}
+
+function mediaSkip(seconds) {
+    if (plyrInstance) {
+        plyrInstance.currentTime = Math.max(0, Math.min(plyrInstance.duration || 0, plyrInstance.currentTime + seconds));
+    }
+}
+
+function formatMediaTime(seconds) {
+    if (!seconds || isNaN(seconds)) return '0:00';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (h > 0) {
+        return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
+    return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function updateMediaTimeDisplay() {
+    const media = document.getElementById('mediaElement');
+    const display = document.getElementById('mediaTimeDisplay');
+    if (media && display) {
+        const current = formatMediaTime(media.currentTime);
+        const total = formatMediaTime(media.duration);
+        display.textContent = `${current} / ${total}`;
+    }
+}
+
+let mediaKeyHandler = null;
+
+function setupMediaListeners() {
+    const media = document.getElementById('mediaElement');
+    if (!media) return;
+
+    // Time display updates
+    media.addEventListener('timeupdate', updateMediaTimeDisplay);
+    media.addEventListener('loadedmetadata', updateMediaTimeDisplay);
+
+    // Remove old keyboard handler if exists
+    if (mediaKeyHandler) {
+        document.removeEventListener('keydown', mediaKeyHandler);
+    }
+
+    // Keyboard controls
+    mediaKeyHandler = (e) => {
+        const player = document.getElementById('mediaPlayerModal');
+        if (!player || player.classList.contains('hidden') || !plyrInstance) return;
+
+        switch (e.key) {
+            case ' ':
+                e.preventDefault();
+                plyrInstance.togglePlay();
+                break;
+            case 'ArrowLeft':
+                e.preventDefault();
+                mediaSkip(-10);
+                break;
+            case 'ArrowRight':
+                e.preventDefault();
+                mediaSkip(10);
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                plyrInstance.volume = Math.min(1, plyrInstance.volume + 0.1);
+                break;
+            case 'ArrowDown':
+                e.preventDefault();
+                plyrInstance.volume = Math.max(0, plyrInstance.volume - 0.1);
+                break;
+            case 'Escape':
+                closeMediaPlayer();
+                break;
+            case 'm':
+                toggleMinimizePlayer();
+                break;
+        }
+    };
+    document.addEventListener('keydown', mediaKeyHandler);
 }
 
 function toggleMinimizePlayer() {
