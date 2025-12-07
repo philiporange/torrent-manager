@@ -1,3 +1,15 @@
+"""
+Server management routes for torrent server configuration and file access.
+
+Provides endpoints for:
+- CRUD operations on torrent server configurations
+- File listing from server download directories
+- Direct file downloads (via HTTP proxy or local mount)
+- HLS streaming for media files via media_server integration
+
+Streaming requires mount_path to be configured for the server, as transcoding
+needs local file access. Files are transcoded to HLS format on-demand.
+"""
 import os
 import secrets
 import posixpath
@@ -12,6 +24,10 @@ from torrent_manager.client_factory import get_client
 from torrent_manager.logger import logger
 from ..schemas import AddServerRequest, UpdateServerRequest
 from ..dependencies import get_current_user, get_user_server, get_http_client
+
+# Media streaming support
+from media_server import jobs as media_jobs
+from media_server.jobs import TranscodeParams
 
 router = APIRouter(tags=["servers"])
 
@@ -434,3 +450,104 @@ async def download_file(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to download file: {str(e)}"
         )
+
+
+# Streaming endpoints for HLS transcoding
+
+STREAMABLE_EXTENSIONS = {
+    ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm", ".m4v",
+    ".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".m4b"
+}
+
+
+@router.post("/servers/{server_id}/stream/{file_path:path}")
+async def stream_file(
+    server_id: str,
+    file_path: str,
+    user: User = Depends(get_current_user)
+):
+    """
+    Start HLS streaming for a media file.
+
+    Requires mount_path to be configured for the server. Creates a transcoding
+    job that converts the file to HLS format for browser playback.
+
+    Returns job info including the playlist URL for playback.
+    """
+    server = get_user_server(server_id, user)
+
+    if not server.mount_path:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Streaming requires mount_path to be configured for this server"
+        )
+
+    # Validate and get local file path
+    local_path = _get_local_file_path(server.mount_path, file_path)
+    if not local_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found on local mount"
+        )
+
+    # Check if file is a streamable media type
+    if local_path.suffix.lower() not in STREAMABLE_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File type {local_path.suffix} is not streamable"
+        )
+
+    try:
+        # Queue transcoding job via media_server
+        job_info = media_jobs.enqueue_job(local_path)
+
+        return {
+            "job_id": job_info.job_id,
+            "playlist": job_info.playlist_url,
+            "duration": job_info.duration,
+            "status": job_info.status,
+            "media_type": job_info.params.media_type,
+            "filename": local_path.name,
+            "server_id": server_id
+        }
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Media file not found"
+        )
+    except Exception as e:
+        logger.error(f"Failed to start streaming: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start streaming: {str(e)}"
+        )
+
+
+@router.get("/servers/{server_id}/stream/{job_id}/info")
+async def get_stream_info(
+    server_id: str,
+    job_id: str,
+    user: User = Depends(get_current_user)
+):
+    """
+    Get status and progress of a streaming job.
+    """
+    # Verify user has access to this server
+    get_user_server(server_id, user)
+
+    job_info = media_jobs.get_job(job_id)
+    if not job_info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Streaming job not found"
+        )
+
+    return {
+        "job_id": job_info.job_id,
+        "playlist": job_info.playlist_url,
+        "duration": job_info.duration,
+        "status": job_info.status,
+        "transcoded": job_info.transcoded,
+        "progress": (job_info.transcoded / job_info.duration * 100) if job_info.duration > 0 else 0,
+        "media_type": job_info.params.media_type
+    }

@@ -3,7 +3,9 @@
  * Displays torrents in a table format with efficient DOM updates.
  * Uses Intersection Observer for lazy row rendering.
  * Supports long-press/double-click to open management modal.
- * Media player (Plyr) is lazy-loaded only when first used.
+ * Media player (Plyr) and HLS.js are lazy-loaded only when first used.
+ * HLS streaming waits for playlist availability before playback.
+ * Transcode progress is shown on the scrubber and seeking is limited.
  */
 
 let pollingEnabled = true;
@@ -395,8 +397,32 @@ function renderManagementFiles(data) {
     container.innerHTML = files.map(f => {
         const size = formatBytes(f.size || 0);
         const filename = f.path.split('/').pop() || f.path;
+        const ext = filename.split('.').pop().toLowerCase();
         const mediaType = getMediaType(filename);
-        const canPlay = data.http_enabled && f.download_url && mediaType;
+
+        // Formats browsers can play natively (no transcoding needed)
+        const nativeFormats = ['mp4', 'm4v', 'mp3', 'aac', 'wav', 'ogg', 'webm', 'm4a', 'm4b'];
+        const canPlayNative = nativeFormats.includes(ext);
+
+        // Determine playback method
+        let playUrl = null;
+        let useHls = false;
+
+        if (f.download_url && mediaType && canPlayNative) {
+            // Native format with download URL - play directly
+            playUrl = f.download_url;
+            useHls = false;
+        } else if (f.stream_url && mediaType) {
+            // Use HLS streaming for non-native formats or when no download URL
+            playUrl = f.stream_url;
+            useHls = true;
+        }
+
+        const canPlay = !!playUrl;
+
+        // Encode URL for safe use in onclick handler
+        const encodedPlayUrl = playUrl ? encodeURI(playUrl) : '';
+        const safeFilename = filename.replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
         return `
             <div class="flex items-center gap-3 px-3 py-2 hover:bg-slate-50">
@@ -406,12 +432,12 @@ function renderManagementFiles(data) {
                 </div>
                 <span class="text-xs text-slate-400">${size}</span>
                 ${canPlay ? `
-                    <button onclick="playMedia('${API_BASE}${f.download_url}', '${mediaType}', '${filename.replace(/'/g, "\\'")}')" class="w-11 h-11 flex items-center justify-center text-emerald-500 hover:text-emerald-700 active:bg-emerald-100 rounded-full select-none touch-manipulation">
+                    <button onclick="playMedia('${API_BASE}${encodedPlayUrl}', '${mediaType}', '${safeFilename}', ${useHls})" class="w-11 h-11 flex items-center justify-center text-emerald-500 hover:text-emerald-700 active:bg-emerald-100 rounded-full select-none touch-manipulation">
                         <i class="fas fa-play text-xl pointer-events-none"></i>
                     </button>
                 ` : ''}
                 ${data.http_enabled && f.download_url ? `
-                    <a href="${API_BASE}${f.download_url}" class="w-11 h-11 flex items-center justify-center text-indigo-500 hover:text-indigo-700 active:bg-indigo-100 rounded-full select-none touch-manipulation" download>
+                    <a href="${API_BASE}${encodeURI(f.download_url)}" class="w-11 h-11 flex items-center justify-center text-indigo-500 hover:text-indigo-700 active:bg-indigo-100 rounded-full select-none touch-manipulation" download>
                         <i class="fas fa-download text-xl pointer-events-none"></i>
                     </a>
                 ` : ''}
@@ -420,9 +446,13 @@ function renderManagementFiles(data) {
     }).join('');
 }
 
-// Media player - Plyr-based fullscreen player
+// Media player - Plyr-based fullscreen player with HLS support
 let plyrInstance = null;
+let hlsInstance = null;
 let plyrLoaded = false;
+let hlsLoaded = false;
+let hlsJobInfo = null;  // Current streaming job {jobId, duration, serverId, status}
+let transcodePollingInterval = null;
 
 async function loadPlyr() {
     if (plyrLoaded) return;
@@ -445,14 +475,146 @@ async function loadPlyr() {
     plyrLoaded = true;
 }
 
-async function playMedia(url, type, filename) {
-    // Load Plyr on first use
-    await loadPlyr();
+async function loadHls() {
+    if (hlsLoaded) return;
 
-    // Destroy existing Plyr instance
+    // Load HLS.js from CDN
+    await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/hls.js@latest';
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+    });
+
+    hlsLoaded = true;
+}
+
+async function playMedia(url, type, filename, useHls = false) {
+    console.log('playMedia called:', { url, type, filename, useHls });
+
+    if (!url) {
+        console.error('playMedia: No URL provided');
+        showToast('No media URL available', 'error');
+        return;
+    }
+
+    try {
+        // Load Plyr on first use
+        await loadPlyr();
+    } catch (e) {
+        console.error('Failed to load Plyr:', e);
+        showToast('Failed to load media player', 'error');
+        return;
+    }
+
+    // Destroy existing instances and clean up
+    if (transcodePollingInterval) {
+        clearInterval(transcodePollingInterval);
+        transcodePollingInterval = null;
+    }
+    hlsJobInfo = null;
+
+    if (hlsInstance) {
+        hlsInstance.destroy();
+        hlsInstance = null;
+    }
     if (plyrInstance) {
         plyrInstance.destroy();
         plyrInstance = null;
+    }
+
+    // If using HLS streaming, start the transcoding job first
+    let hlsPlaylistUrl = null;
+    if (useHls) {
+        console.log('Loading HLS.js...');
+        try {
+            await loadHls();
+            console.log('HLS.js loaded successfully');
+        } catch (e) {
+            console.error('Failed to load HLS.js:', e);
+            showToast('Failed to load streaming library', 'error');
+            return;
+        }
+        console.log('About to fetch:', url);
+        try {
+            // POST to stream endpoint to start transcoding
+            console.log('Starting HLS stream fetch...');
+            const response = await fetch(url, {
+                method: 'POST',
+                credentials: 'include'
+            });
+            console.log('Stream response status:', response.status);
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Stream error response:', errorText);
+                try {
+                    const error = JSON.parse(errorText);
+                    showToast(error.detail || 'Failed to start streaming', 'error');
+                } catch {
+                    showToast('Failed to start streaming: ' + response.status, 'error');
+                }
+                return;
+            }
+            const data = await response.json();
+            console.log('Stream response data:', data);
+            hlsPlaylistUrl = API_BASE + data.playlist;
+            console.log('HLS playlist URL:', hlsPlaylistUrl);
+
+            // Store job info for duration and progress tracking
+            hlsJobInfo = {
+                jobId: data.job_id,
+                duration: data.duration,
+                serverId: data.server_id,
+                status: data.status
+            };
+
+            // Determine media type from response
+            if (data.media_type) {
+                type = data.media_type;
+            }
+
+            // Wait for the playlist to be created by ffmpeg
+            // The playlist doesn't exist immediately - ffmpeg needs to write the first segment
+            // Use GET instead of HEAD as StaticFiles HEAD can return false positives
+            const maxWaitMs = 30000;
+            const pollIntervalMs = 500;
+            const startTime = Date.now();
+            let playlistReady = false;
+
+            console.log('Waiting for playlist to be ready...');
+            showToast('Starting stream, please wait...', 'info');
+
+            while (Date.now() - startTime < maxWaitMs) {
+                try {
+                    const checkResponse = await fetch(hlsPlaylistUrl, {
+                        method: 'GET',
+                        credentials: 'include'
+                    });
+                    if (checkResponse.ok) {
+                        // Verify we got actual playlist content (not empty or error)
+                        const text = await checkResponse.text();
+                        if (text.includes('#EXTM3U')) {
+                            playlistReady = true;
+                            console.log('Playlist is ready');
+                            break;
+                        }
+                    }
+                } catch {
+                    // Playlist not ready yet
+                }
+                await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+            }
+
+            if (!playlistReady) {
+                showToast('Streaming timed out - transcoding may still be starting', 'error');
+                return;
+            }
+        } catch (e) {
+            console.error('HLS stream error:', e);
+            showToast('Failed to start streaming: ' + e.message, 'error');
+            return;
+        }
     }
 
     let player = document.getElementById('mediaPlayerModal');
@@ -499,7 +661,7 @@ async function playMedia(url, type, filename) {
     const content = document.getElementById('mediaPlayerContent');
     const ext = filename.split('.').pop().toLowerCase();
 
-    // Determine MIME type
+    // Determine MIME type for direct playback
     let mimeType = '';
     if (type === 'audio') {
         if (ext === 'm4b' || ext === 'm4a') mimeType = 'audio/mp4';
@@ -516,13 +678,15 @@ async function playMedia(url, type, filename) {
         else if (ext === 'mov') mimeType = 'video/quicktime';
     }
 
+    // Determine source URL - use HLS playlist if streaming, otherwise direct URL
+    const sourceUrl = hlsPlaylistUrl || url;
+    const sourceMime = hlsPlaylistUrl ? 'application/x-mpegURL' : mimeType;
+
     if (type === 'audio') {
         content.innerHTML = `
             <div class="w-full max-w-2xl px-8">
                 <div class="text-white text-center mb-4 text-lg truncate">${filename}</div>
-                <audio id="mediaElement" preload="metadata">
-                    <source src="${url}" type="${mimeType}">
-                </audio>
+                <audio id="mediaElement" preload="metadata"></audio>
                 <div class="flex items-center justify-center gap-3 mt-6">
                     <button onclick="mediaSkip(-30)" class="w-10 h-10 flex items-center justify-center text-white/70 hover:text-white bg-white/10 hover:bg-white/20 rounded-full transition-colors" title="Back 30s">
                         <i class="fas fa-undo"></i>
@@ -551,10 +715,28 @@ async function playMedia(url, type, filename) {
         `;
     } else {
         content.innerHTML = `
-            <video id="mediaElement" preload="metadata" playsinline webkit-playsinline class="w-full h-full">
-                <source src="${url}" type="${mimeType}">
-            </video>
+            <video id="mediaElement" preload="metadata" playsinline webkit-playsinline class="w-full h-full"></video>
         `;
+    }
+
+    // Setup media source - use HLS.js for HLS streams, direct source otherwise
+    const mediaEl = document.getElementById('mediaElement');
+    if (hlsPlaylistUrl && typeof Hls !== 'undefined' && Hls.isSupported()) {
+        hlsInstance = new Hls();
+        hlsInstance.loadSource(hlsPlaylistUrl);
+        hlsInstance.attachMedia(mediaEl);
+        hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+            if (data.fatal) {
+                console.error('HLS error:', data);
+                showToast('Streaming error: ' + data.type, 'error');
+            }
+        });
+    } else if (hlsPlaylistUrl && mediaEl.canPlayType('application/vnd.apple.mpegurl')) {
+        // Native HLS support (Safari)
+        mediaEl.src = hlsPlaylistUrl;
+    } else {
+        // Direct playback - set src directly for reliable loading
+        mediaEl.src = url;
     }
 
     // Reset to fullscreen and show
@@ -564,7 +746,6 @@ async function playMedia(url, type, filename) {
     if (minimizeIcon) minimizeIcon.className = 'fas fa-compress-alt text-xl';
 
     // Initialize Plyr
-    const mediaEl = document.getElementById('mediaElement');
     if (mediaEl && typeof Plyr !== 'undefined') {
         plyrInstance = new Plyr(mediaEl, {
             controls: type === 'audio'
@@ -576,6 +757,45 @@ async function playMedia(url, type, filename) {
             tooltips: { controls: true, seek: true },
             fullscreen: { enabled: true, fallback: true, iosNative: true }
         });
+
+        // For HLS streaming, set duration from job info and add transcode progress
+        if (hlsJobInfo && hlsJobInfo.duration) {
+            plyrInstance.on('ready', () => {
+                // Override duration display
+                const durationEl = plyrInstance.elements.container.querySelector('.plyr__time--duration');
+                if (durationEl) {
+                    durationEl.textContent = formatMediaTime(hlsJobInfo.duration);
+                }
+
+                // Add transcoded progress indicator overlay
+                const progressContainer = plyrInstance.elements.container.querySelector('.plyr__progress');
+                if (progressContainer) {
+                    let transcodeBar = progressContainer.querySelector('.transcode-progress');
+                    if (!transcodeBar) {
+                        transcodeBar = document.createElement('div');
+                        transcodeBar.className = 'transcode-progress';
+                        transcodeBar.style.cssText = 'position:absolute;top:50%;left:0;height:100%;transform:translateY(-50%);background:rgba(99,102,241,0.4);pointer-events:none;z-index:1;border-radius:inherit;transition:width 0.3s ease;';
+                        progressContainer.style.position = 'relative';
+                        progressContainer.insertBefore(transcodeBar, progressContainer.firstChild);
+                    }
+                }
+
+                // Start polling for transcode progress
+                startTranscodePolling();
+            });
+
+            // Handle seek to prevent seeking past transcoded portion
+            plyrInstance.on('seeking', () => {
+                if (hlsJobInfo && hlsJobInfo.transcoded !== undefined && hlsJobInfo.status !== 'done') {
+                    const seekTime = plyrInstance.currentTime;
+                    const maxSeek = Math.max(0, hlsJobInfo.transcoded - 10); // 10s buffer
+                    if (seekTime > maxSeek) {
+                        plyrInstance.currentTime = maxSeek;
+                        showToast('Cannot seek past transcoded portion', 'info');
+                    }
+                }
+            });
+        }
     }
 
     // Reset speed to 1x for new media
@@ -590,8 +810,87 @@ async function playMedia(url, type, filename) {
     setupMediaListeners();
 }
 
+function formatMediaTime(seconds) {
+    if (!seconds || seconds < 0) return '0:00';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (h > 0) {
+        return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
+    return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function startTranscodePolling() {
+    // Clear any existing interval
+    if (transcodePollingInterval) {
+        clearInterval(transcodePollingInterval);
+    }
+
+    const pollStatus = async () => {
+        if (!hlsJobInfo || !hlsJobInfo.jobId || !hlsJobInfo.serverId) return;
+
+        try {
+            const response = await fetch(
+                `${API_BASE}/servers/${hlsJobInfo.serverId}/stream/${hlsJobInfo.jobId}/info`,
+                { credentials: 'include' }
+            );
+            if (response.ok) {
+                const info = await response.json();
+                hlsJobInfo.transcoded = info.transcoded;
+                hlsJobInfo.status = info.status;
+
+                // Update transcoded progress bar
+                updateTranscodeProgress();
+
+                // Stop polling if done
+                if (info.status === 'done') {
+                    clearInterval(transcodePollingInterval);
+                    transcodePollingInterval = null;
+                    // Remove the transcode bar when done
+                    const transcodeBar = document.querySelector('.transcode-progress');
+                    if (transcodeBar) {
+                        transcodeBar.style.width = '100%';
+                        setTimeout(() => transcodeBar.remove(), 500);
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Failed to poll transcode status:', e);
+        }
+    };
+
+    // Poll immediately and then every 2 seconds
+    pollStatus();
+    transcodePollingInterval = setInterval(pollStatus, 2000);
+}
+
+function updateTranscodeProgress() {
+    if (!hlsJobInfo || !plyrInstance) return;
+
+    const progressContainer = plyrInstance.elements.container?.querySelector('.plyr__progress');
+    const transcodeBar = progressContainer?.querySelector('.transcode-progress');
+
+    if (transcodeBar && hlsJobInfo.duration > 0) {
+        const percent = Math.min(100, (hlsJobInfo.transcoded / hlsJobInfo.duration) * 100);
+        transcodeBar.style.width = `${percent}%`;
+    }
+}
+
 function closeMediaPlayer() {
-    // Destroy Plyr instance first
+    // Stop transcode polling
+    if (transcodePollingInterval) {
+        clearInterval(transcodePollingInterval);
+        transcodePollingInterval = null;
+    }
+    hlsJobInfo = null;
+
+    // Destroy HLS instance first
+    if (hlsInstance) {
+        hlsInstance.destroy();
+        hlsInstance = null;
+    }
+    // Destroy Plyr instance
     if (plyrInstance) {
         plyrInstance.destroy();
         plyrInstance = null;

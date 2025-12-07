@@ -422,6 +422,14 @@ async def list_torrent_files(
 
     # Check if downloads are available (HTTP or local mount)
     http_enabled = bool(server.http_port or server.mount_path) if server else False
+    # Check if streaming is available (requires mount_path)
+    stream_enabled = bool(server.mount_path) if server else False
+
+    # Streamable file extensions
+    streamable_exts = {
+        ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm", ".m4v",
+        ".mp3", ".flac", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".m4b"
+    }
 
     result_files = []
     for f in files:
@@ -432,15 +440,22 @@ async def list_torrent_files(
             "priority": f.get("priority", 1)
         }
 
+        # Construct the relative path for downloading/streaming
+        # For multi-file torrents, files are in torrent_name/file_path
+        rel_path = f.get("path", "")
+        is_multi_file = torrent.get("is_multi_file", False)
+        if is_multi_file and torrent_name:
+            rel_path = f"{torrent_name}/{rel_path}"
+
         # Add download URL if HTTP or local mount is configured
-        if http_enabled or (server and server.mount_path):
-            # Construct the relative path for downloading
-            # For multi-file torrents, files are in torrent_name/file_path
-            rel_path = f.get("path", "")
-            is_multi_file = torrent.get("is_multi_file", False)
-            if is_multi_file and torrent_name:
-                rel_path = f"{torrent_name}/{rel_path}"
+        if http_enabled:
             file_info["download_url"] = f"/servers/{server.id}/download/{rel_path}"
+
+        # Add stream URL for streamable files if mount_path is configured
+        if stream_enabled:
+            file_ext = "." + rel_path.rsplit(".", 1)[-1].lower() if "." in rel_path else ""
+            if file_ext in streamable_exts:
+                file_info["stream_url"] = f"/servers/{server.id}/stream/{rel_path}"
 
         result_files.append(file_info)
 
@@ -451,5 +466,6 @@ async def list_torrent_files(
         "server_id": server.id if server else None,
         "server_name": server.name if server else None,
         "http_enabled": http_enabled,
+        "stream_enabled": stream_enabled,
         "files": result_files
     }

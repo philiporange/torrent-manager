@@ -1,5 +1,17 @@
+"""
+FastAPI application for Torrent Manager.
+
+Integrates multiple background services:
+- Seeding monitor for auto-pause of completed torrents
+- Torrent poller for tracking torrent status
+- Media streaming worker for HLS transcoding via media_server
+
+The HLS output directory is mounted at /media for serving transcoded streams.
+"""
 import asyncio
 import datetime
+import mimetypes
+import threading
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +21,10 @@ from torrent_manager.logger import logger
 from torrent_manager.auth import SessionManager, ApiKeyManager
 from torrent_manager.trackers import fetch_trackers
 from torrent_manager.polling import get_poller
+
+# Media streaming support
+from media_server.config import cfg as media_cfg
+from media_server import worker as media_worker
 
 from .routes import auth, servers, torrents, admin, pages
 from .routes.auth import set_session_cookie
@@ -68,6 +84,18 @@ async def seeding_monitor_task():
         await asyncio.sleep(Config.SEEDING_CHECK_INTERVAL)
 
 
+def _start_media_worker():
+    """Start media_server transcoding worker in background thread."""
+    if getattr(_start_media_worker, "_started", False):
+        return
+    # Ensure HLS output directory exists
+    media_cfg.HLS_DIR.mkdir(parents=True, exist_ok=True)
+    th = threading.Thread(target=media_worker.main, name="media-worker", daemon=True)
+    th.start()
+    logger.info(f"Media streaming worker started (HLS dir: {media_cfg.HLS_DIR})")
+    _start_media_worker._started = True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
@@ -76,6 +104,9 @@ async def lifespan(app: FastAPI):
     SessionManager.cleanup_expired_sessions()
     SessionManager.cleanup_expired_tokens()
     ApiKeyManager.cleanup_expired_keys()
+
+    # Start media streaming worker
+    _start_media_worker()
 
     # Fetch and cache public tracker list
     await fetch_trackers()
@@ -116,17 +147,18 @@ app = FastAPI(
 # Mount static files
 app.mount("/static", StaticFiles(directory="torrent_manager/static"), name="static")
 
-# Add CORS middleware
+# Mount HLS media output for streaming
+media_cfg.HLS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(media_cfg.HLS_DIR), check_dir=False), name="hls_media")
+
+# Register HLS MIME types
+mimetypes.add_type("application/vnd.apple.mpegurl", ".m3u8")
+mimetypes.add_type("video/mp2t", ".ts")
+
+# Add CORS middleware - allow all origins (private tool)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:8000",
-        "http://localhost:8080",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:8000",
-        "http://127.0.0.1:8080",
-    ],
+    allow_origin_regex=".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

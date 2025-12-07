@@ -1,5 +1,6 @@
 bencodepy
 docker
+-e /home/sam/Code/media_server
 fastapi
 httpx
 libtorrent
