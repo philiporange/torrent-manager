@@ -8,7 +8,7 @@ import datetime
 import os
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient
+from httpx import AsyncClient, ASGITransport
 from peewee import SqliteDatabase
 
 # Disable secure cookies for testing
@@ -50,7 +50,8 @@ def setup_test_db():
 @pytest_asyncio.fixture
 async def async_client():
     """Create async test client."""
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 
 
@@ -382,7 +383,8 @@ class TestApiKeyEndpoints:
     async def test_revoke_api_key_endpoint(self, test_user):
         """Test revoking API key via endpoint."""
         # Use separate client instances to avoid cookie interference
-        async with AsyncClient(app=app, base_url="http://test") as client1:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client1:
             await client1.post("/auth/login", json={
                 "username": "testuser",
                 "password": "testpass123",
@@ -404,7 +406,8 @@ class TestApiKeyEndpoints:
             assert revoke_response.json()["message"] == "API key revoked successfully"
 
         # Use a fresh client without session cookies to test API key
-        async with AsyncClient(app=app, base_url="http://test") as client2:
+        transport2 = ASGITransport(app=app)
+        async with AsyncClient(transport=transport2, base_url="http://test") as client2:
             # Verify key is revoked by trying to use it
             test_response = await client2.get(
                 "/auth/me",

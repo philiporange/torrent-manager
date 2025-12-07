@@ -420,8 +420,8 @@ async def list_torrent_files(
     torrent_name = torrent.get("name", "")
     torrent_path = torrent.get("path", "")
 
-    # Check if HTTP downloads are available
-    http_enabled = bool(server.http_port) if server else False
+    # Check if downloads are available (HTTP or local mount)
+    http_enabled = bool(server.http_port or server.mount_path) if server else False
 
     result_files = []
     for f in files:
@@ -432,11 +432,14 @@ async def list_torrent_files(
             "priority": f.get("priority", 1)
         }
 
-        # Add download URL if HTTP is configured
-        if http_enabled:
+        # Add download URL if HTTP or local mount is configured
+        if http_enabled or (server and server.mount_path):
             # Construct the relative path for downloading
-            # Usually files are in torrent_name/file_path
+            # For multi-file torrents, files are in torrent_name/file_path
             rel_path = f.get("path", "")
+            is_multi_file = torrent.get("is_multi_file", False)
+            if is_multi_file and torrent_name:
+                rel_path = f"{torrent_name}/{rel_path}"
             file_info["download_url"] = f"/servers/{server.id}/download/{rel_path}"
 
         result_files.append(file_info)
