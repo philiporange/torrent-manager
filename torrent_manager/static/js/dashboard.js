@@ -395,7 +395,6 @@ function renderManagementFiles(data) {
     container.innerHTML = files.map(f => {
         const size = formatBytes(f.size || 0);
         const filename = f.path.split('/').pop() || f.path;
-        const progress = ((f.progress || 0) * 100).toFixed(0);
         const mediaType = getMediaType(filename);
         const canPlay = data.http_enabled && f.download_url && mediaType;
 
@@ -406,15 +405,14 @@ function renderManagementFiles(data) {
                     <div class="truncate text-sm text-slate-700" title="${f.path}">${filename}</div>
                 </div>
                 <span class="text-xs text-slate-400">${size}</span>
-                <span class="text-xs text-slate-400 w-10 text-right">${progress}%</span>
                 ${canPlay ? `
-                    <button onclick="playMedia('${API_BASE}${f.download_url}', '${mediaType}', '${filename.replace(/'/g, "\\'")}')" class="text-emerald-500 hover:text-emerald-700">
-                        <i class="fas fa-play"></i>
+                    <button onclick="playMedia('${API_BASE}${f.download_url}', '${mediaType}', '${filename.replace(/'/g, "\\'")}')" class="w-11 h-11 flex items-center justify-center text-emerald-500 hover:text-emerald-700 active:bg-emerald-100 rounded-full select-none touch-manipulation">
+                        <i class="fas fa-play text-xl pointer-events-none"></i>
                     </button>
                 ` : ''}
                 ${data.http_enabled && f.download_url ? `
-                    <a href="${API_BASE}${f.download_url}" class="text-indigo-500 hover:text-indigo-700" download>
-                        <i class="fas fa-download"></i>
+                    <a href="${API_BASE}${f.download_url}" class="w-11 h-11 flex items-center justify-center text-indigo-500 hover:text-indigo-700 active:bg-indigo-100 rounded-full select-none touch-manipulation" download>
+                        <i class="fas fa-download text-xl pointer-events-none"></i>
                     </a>
                 ` : ''}
             </div>

@@ -1,8 +1,11 @@
+import os
 import secrets
 import posixpath
+from pathlib import Path
+from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from starlette.concurrency import run_in_threadpool
 from torrent_manager.models import TorrentServer, User
 from torrent_manager.client_factory import get_client
@@ -48,7 +51,8 @@ async def add_server(request: AddServerRequest, user: User = Depends(get_current
         http_path=request.http_path,
         http_username=request.http_username,
         http_password=request.http_password,
-        http_use_ssl=request.http_use_ssl
+        http_use_ssl=request.http_use_ssl,
+        mount_path=request.mount_path
     )
 
     return {
@@ -70,7 +74,8 @@ async def add_server(request: AddServerRequest, user: User = Depends(get_current
         "http_path": server.http_path,
         "http_username": server.http_username,
         "http_use_ssl": server.http_use_ssl,
-        "http_enabled": bool(server.http_port)
+        "http_enabled": bool(server.http_port),
+        "mount_path": server.mount_path
     }
 
 
@@ -95,7 +100,8 @@ async def list_servers(user: User = Depends(get_current_user)):
             "http_path": s.http_path,
             "http_username": s.http_username,
             "http_use_ssl": s.http_use_ssl,
-            "http_enabled": bool(s.http_port)
+            "http_enabled": bool(s.http_port),
+            "mount_path": s.mount_path
         }
         for s in servers
     ]
@@ -122,7 +128,8 @@ async def get_server(server_id: str, user: User = Depends(get_current_user)):
         "http_path": server.http_path,
         "http_username": server.http_username,
         "http_use_ssl": server.http_use_ssl,
-        "http_enabled": bool(server.http_port)
+        "http_enabled": bool(server.http_port),
+        "mount_path": server.mount_path
     }
 
 
@@ -163,6 +170,8 @@ async def update_server(
         server.http_password = request.http_password
     if request.http_use_ssl is not None:
         server.http_use_ssl = request.http_use_ssl
+    if request.mount_path is not None:
+        server.mount_path = request.mount_path
     if request.is_default is not None:
         if request.is_default:
             # Clear other defaults when setting this one as default
@@ -190,7 +199,8 @@ async def update_server(
         "http_username": server.http_username,
         "http_use_ssl": server.http_use_ssl,
         "http_enabled": bool(server.http_port),
-        "is_default": server.is_default
+        "is_default": server.is_default,
+        "mount_path": server.mount_path
     }
 
 
@@ -228,6 +238,37 @@ async def test_server(server_id: str, user: User = Depends(get_current_user)):
             "message": str(e)
         }
 
+def _list_local_dir(mount_path: str, rel_path: str) -> list:
+    """List files from a local mount path, returns list of entry dicts."""
+    base = Path(mount_path)
+    target = base / rel_path if rel_path else base
+
+    if not target.exists():
+        return None
+    if not target.is_dir():
+        return None
+
+    # Ensure we don't traverse outside mount_path
+    try:
+        target.resolve().relative_to(base.resolve())
+    except ValueError:
+        return None
+
+    entries = []
+    for item in target.iterdir():
+        stat = item.stat()
+        rel = str(item.relative_to(base))
+        entries.append({
+            "name": item.name,
+            "path": rel,
+            "is_dir": item.is_dir(),
+            "size": stat.st_size if not item.is_dir() else None,
+            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            "raw_size": None
+        })
+    return entries
+
+
 @router.get("/servers/{server_id}/files")
 async def list_server_files(
     server_id: str,
@@ -235,20 +276,34 @@ async def list_server_files(
     user: User = Depends(get_current_user)
 ):
     """
-    List files and directories at the server's HTTP download location.
+    List files and directories at the server's download location.
 
-    Requires the server to have HTTP download configuration (http_port set).
-    The path is relative to the server's http_path base directory.
+    If mount_path is configured and available, uses local filesystem.
+    Otherwise falls back to HTTP download server (requires http_port set).
     """
     server = get_user_server(server_id, user)
-    client = get_http_client(server)
 
+    # Try local mount first
+    if server.mount_path:
+        local_entries = _list_local_dir(server.mount_path, path)
+        if local_entries is not None:
+            return {
+                "server_id": server_id,
+                "server_name": server.name,
+                "path": path,
+                "source": "local",
+                "entries": local_entries
+            }
+
+    # Fall back to HTTP
+    client = get_http_client(server)
     try:
         entries = client.listdir(path)
         return {
             "server_id": server_id,
             "server_name": server.name,
             "path": path,
+            "source": "http",
             "entries": [
                 {
                     "name": e.name,
@@ -269,6 +324,23 @@ async def list_server_files(
         )
 
 
+def _get_local_file_path(mount_path: str, file_path: str) -> Path | None:
+    """Get validated local file path, or None if not available."""
+    base = Path(mount_path)
+    target = base / file_path
+
+    if not target.exists() or not target.is_file():
+        return None
+
+    # Ensure we don't traverse outside mount_path
+    try:
+        target.resolve().relative_to(base.resolve())
+    except ValueError:
+        return None
+
+    return target
+
+
 @router.get("/servers/{server_id}/download/{file_path:path}")
 async def download_file(
     server_id: str,
@@ -277,14 +349,13 @@ async def download_file(
     user: User = Depends(get_current_user)
 ):
     """
-    Proxy download a file from the server's HTTP download location.
+    Download a file from the server's download location.
 
-    This endpoint streams the file through the API server, acting as a proxy
-    so that end users don't need the server's HTTP credentials.
+    If mount_path is configured and available, serves directly from local filesystem.
+    Otherwise proxies through the HTTP download server.
     Supports HTTP Range requests for media seeking.
     """
     server = get_user_server(server_id, user)
-    client = get_http_client(server)
 
     # Get the filename for Content-Disposition header
     filename = posixpath.basename(file_path)
@@ -294,6 +365,18 @@ async def download_file(
             detail="Invalid file path"
         )
 
+    # Try local mount first
+    if server.mount_path:
+        local_path = _get_local_file_path(server.mount_path, file_path)
+        if local_path:
+            return FileResponse(
+                path=local_path,
+                filename=filename,
+                media_type=None  # Let FastAPI determine content type
+            )
+
+    # Fall back to HTTP proxy
+    client = get_http_client(server)
     try:
         # Build the URL for the file
         url = client._build_url(file_path, is_dir=False)

@@ -27,7 +27,7 @@ MAX_INTERVAL = 300
 PUBLIC_SEED_DURATION = 0
 PRIVATE_SEED_DURATION = 7 * 24 * 3600  # 7 days for private torrents
 AUTO_PAUSE_SEEDING = True              # Enable/disable auto-pause feature
-SEEDING_CHECK_INTERVAL = 300           # Check interval in seconds (5 minutes)
+SEEDING_CHECK_INTERVAL = 60            # Check interval in seconds (1 minute)
 
 # Server polling intervals (in seconds)
 POLL_SERVER_IDLE_INTERVAL = 60         # Poll servers every 60s when idle

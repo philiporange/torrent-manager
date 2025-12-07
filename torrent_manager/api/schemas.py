@@ -44,6 +44,8 @@ class AddServerRequest(BaseModel):
     http_username: Optional[str] = None
     http_password: Optional[str] = None
     http_use_ssl: bool = False
+    # Local mount path for sshfs-mounted directory
+    mount_path: Optional[str] = None
 
 
 class UpdateServerRequest(BaseModel):
@@ -63,6 +65,8 @@ class UpdateServerRequest(BaseModel):
     http_username: Optional[str] = None
     http_password: Optional[str] = None
     http_use_ssl: Optional[bool] = None
+    # Local mount path for sshfs-mounted directory
+    mount_path: Optional[str] = None
 
 
 class CreateUserRequest(BaseModel):

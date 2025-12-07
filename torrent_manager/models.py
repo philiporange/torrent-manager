@@ -2,7 +2,7 @@
 Database models for the torrent manager application.
 
 Includes models for user authentication (User, Session, RememberMeToken, ApiKey),
-torrent server configuration (TorrentServer with HTTP download support),
+torrent server configuration (TorrentServer with HTTP download and local mount support),
 and torrent tracking (Torrent, Status, Action).
 """
 
@@ -32,6 +32,10 @@ class TorrentServer(BaseModel):
     HTTP download fields (http_*) configure access to an nginx server serving
     the torrent downloads directory, enabling file browsing and download through
     the API proxy.
+
+    mount_path optionally specifies a local sshfs-mounted directory path that
+    maps to the server's download directory. When set, file serving will prefer
+    the local mount for faster access before falling back to HTTP proxy.
     """
     id = CharField(primary_key=True)
     user_id = CharField(index=True)
@@ -53,6 +57,8 @@ class TorrentServer(BaseModel):
     http_username = CharField(null=True)  # HTTP Basic Auth username
     http_password = CharField(null=True)  # HTTP Basic Auth password
     http_use_ssl = BooleanField(default=False)  # Use HTTPS for HTTP downloads
+    # Local mount path for sshfs-mounted directory (for direct file access)
+    mount_path = CharField(null=True)
 
 class Session(BaseModel):
     """

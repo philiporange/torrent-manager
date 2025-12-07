@@ -42,12 +42,16 @@ function renderServersList(container) {
                         ${s.http_enabled ? `<span class="text-xs font-medium px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
                             <i class="fas fa-download mr-1"></i>HTTP
                         </span>` : ''}
+                        ${s.mount_path ? `<span class="text-xs font-medium px-2.5 py-0.5 rounded-full bg-violet-100 text-violet-800">
+                            <i class="fas fa-folder-tree mr-1"></i>Local
+                        </span>` : ''}
                     </h3>
                     <div class="text-sm text-slate-500 mt-1 font-mono">
                         ${s.host}:${s.port}
                     </div>
                     ${s.rpc_path ? `<div class="text-xs text-slate-400 mt-1">RPC: ${s.rpc_path}</div>` : ''}
                     ${s.http_enabled ? `<div class="text-xs text-slate-400 mt-1">HTTP: ${s.http_host || s.host}:${s.http_port}${s.http_path || '/'}</div>` : ''}
+                    ${s.mount_path ? `<div class="text-xs text-slate-400 mt-1">Mount: ${s.mount_path}</div>` : ''}
                 </div>
             </div>
 
@@ -55,7 +59,7 @@ function renderServersList(container) {
                 ${!s.is_default ? `<button onclick="setDefaultServer('${s.id}')" class="px-4 py-2 text-sm font-medium text-amber-600 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors">
                     <i class="fas fa-star mr-2"></i> Set Default
                 </button>` : ''}
-                ${s.http_enabled ? `<button onclick="browseFiles('${s.id}')" class="px-4 py-2 text-sm font-medium text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors">
+                ${(s.http_enabled || s.mount_path) ? `<button onclick="browseFiles('${s.id}')" class="px-4 py-2 text-sm font-medium text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors">
                     <i class="fas fa-folder-open mr-2"></i> Files
                 </button>` : ''}
                 <button onclick="testServer('${s.id}')" class="px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors">
@@ -92,7 +96,9 @@ async function handleAddServer(event) {
         http_path: form.http_path.value || null,
         http_username: form.http_username.value || null,
         http_password: form.http_password.value || null,
-        http_use_ssl: form.http_use_ssl.checked
+        http_use_ssl: form.http_use_ssl.checked,
+        // Local mount configuration
+        mount_path: form.mount_path.value || null
     };
 
     try {
@@ -135,6 +141,8 @@ function editServer(id) {
     form.http_username.value = s.http_username || '';
     form.http_password.value = '';
     form.http_use_ssl.checked = s.http_use_ssl || false;
+    // Local mount field
+    form.mount_path.value = s.mount_path || '';
 
     document.getElementById('formContainer').scrollIntoView({ behavior: 'smooth' });
 }
