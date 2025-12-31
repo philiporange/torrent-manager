@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel
 
 class LoginRequest(BaseModel):
@@ -21,6 +21,7 @@ class AddTorrentRequest(BaseModel):
     uri: str  # Magnet URI or HTTP/HTTPS URL to torrent file
     server_id: str  # Which server to add the torrent to
     start: bool = True
+    labels: Optional[List[str]] = None  # Labels to apply after adding
 
 
 class TorrentActionRequest(BaseModel):
@@ -46,6 +47,8 @@ class AddServerRequest(BaseModel):
     http_use_ssl: bool = False
     # Local mount path for sshfs-mounted directory
     mount_path: Optional[str] = None
+    # Download directory on the server (for computing relative paths)
+    download_dir: Optional[str] = None
 
 
 class UpdateServerRequest(BaseModel):
@@ -67,6 +70,8 @@ class UpdateServerRequest(BaseModel):
     http_use_ssl: Optional[bool] = None
     # Local mount path for sshfs-mounted directory
     mount_path: Optional[str] = None
+    # Download directory on the server (for computing relative paths)
+    download_dir: Optional[str] = None
 
 
 class CreateUserRequest(BaseModel):
@@ -78,3 +83,11 @@ class CreateUserRequest(BaseModel):
 class UpdateUserRequest(BaseModel):
     password: Optional[str] = None
     is_admin: Optional[bool] = None
+
+
+class SetLabelsRequest(BaseModel):
+    labels: List[str]
+
+
+class AddLabelRequest(BaseModel):
+    label: str

@@ -52,6 +52,7 @@ function renderServersList(container) {
                     ${s.rpc_path ? `<div class="text-xs text-slate-400 mt-1">RPC: ${s.rpc_path}</div>` : ''}
                     ${s.http_enabled ? `<div class="text-xs text-slate-400 mt-1">HTTP: ${s.http_host || s.host}:${s.http_port}${s.http_path || '/'}</div>` : ''}
                     ${s.mount_path ? `<div class="text-xs text-slate-400 mt-1">Mount: ${s.mount_path}</div>` : ''}
+                    ${s.download_dir ? `<div class="text-xs text-slate-400 mt-1">Download Dir: ${s.download_dir}</div>` : ''}
                 </div>
             </div>
 
@@ -98,7 +99,9 @@ async function handleAddServer(event) {
         http_password: form.http_password.value || null,
         http_use_ssl: form.http_use_ssl.checked,
         // Local mount configuration
-        mount_path: form.mount_path.value || null
+        mount_path: form.mount_path.value || null,
+        // Download directory for path mapping
+        download_dir: form.download_dir.value || null
     };
 
     try {
@@ -143,6 +146,8 @@ function editServer(id) {
     form.http_use_ssl.checked = s.http_use_ssl || false;
     // Local mount field
     form.mount_path.value = s.mount_path || '';
+    // Download directory field
+    form.download_dir.value = s.download_dir || '';
 
     document.getElementById('formContainer').scrollIntoView({ behavior: 'smooth' });
 }

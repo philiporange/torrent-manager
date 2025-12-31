@@ -68,7 +68,8 @@ async def add_server(request: AddServerRequest, user: User = Depends(get_current
         http_username=request.http_username,
         http_password=request.http_password,
         http_use_ssl=request.http_use_ssl,
-        mount_path=request.mount_path
+        mount_path=request.mount_path,
+        download_dir=request.download_dir
     )
 
     return {
@@ -91,7 +92,8 @@ async def add_server(request: AddServerRequest, user: User = Depends(get_current
         "http_username": server.http_username,
         "http_use_ssl": server.http_use_ssl,
         "http_enabled": bool(server.http_port),
-        "mount_path": server.mount_path
+        "mount_path": server.mount_path,
+        "download_dir": server.download_dir
     }
 
 
@@ -117,7 +119,8 @@ async def list_servers(user: User = Depends(get_current_user)):
             "http_username": s.http_username,
             "http_use_ssl": s.http_use_ssl,
             "http_enabled": bool(s.http_port),
-            "mount_path": s.mount_path
+            "mount_path": s.mount_path,
+            "download_dir": s.download_dir
         }
         for s in servers
     ]
@@ -145,7 +148,8 @@ async def get_server(server_id: str, user: User = Depends(get_current_user)):
         "http_username": server.http_username,
         "http_use_ssl": server.http_use_ssl,
         "http_enabled": bool(server.http_port),
-        "mount_path": server.mount_path
+        "mount_path": server.mount_path,
+        "download_dir": server.download_dir
     }
 
 
@@ -188,6 +192,8 @@ async def update_server(
         server.http_use_ssl = request.http_use_ssl
     if request.mount_path is not None:
         server.mount_path = request.mount_path
+    if request.download_dir is not None:
+        server.download_dir = request.download_dir
     if request.is_default is not None:
         if request.is_default:
             # Clear other defaults when setting this one as default
@@ -216,7 +222,8 @@ async def update_server(
         "http_use_ssl": server.http_use_ssl,
         "http_enabled": bool(server.http_port),
         "is_default": server.is_default,
-        "mount_path": server.mount_path
+        "mount_path": server.mount_path,
+        "download_dir": server.download_dir
     }
 
 

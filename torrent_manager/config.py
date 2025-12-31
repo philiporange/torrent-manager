@@ -50,6 +50,14 @@ CONTAINER_NAME = "rtorrent-manager"
 TRACKERS_LIST_URL = "https://raw.githubusercontent.com/ngosang/trackerslist/refs/heads/master/trackers_best.txt"
 AUGMENT_TRACKERS = True
 
+# Magnet resolver settings (uses magnet2torrent to convert magnets to .torrent files)
+MAGNET_RESOLVER_ENABLED = True
+MAGNET_RESOLVER_TIMEOUT = 300
+MAGNET_RESOLVER_ENABLE_DHT = False
+MAGNET_RESOLVER_PROXY_HOST = None
+MAGNET_RESOLVER_PROXY_PORT = None
+MAGNET_RESOLVER_HTTP_PROXY = None
+
 
 class Config:
     DEBUG = os.getenv("DEBUG", DEBUG)
@@ -106,6 +114,14 @@ class Config:
     # Tracker augmentation for public torrents
     TRACKERS_LIST_URL = os.getenv("TRACKERS_LIST_URL", TRACKERS_LIST_URL)
     AUGMENT_TRACKERS = os.getenv("AUGMENT_TRACKERS", str(AUGMENT_TRACKERS)).lower() == "true"
+
+    # Magnet resolver settings
+    MAGNET_RESOLVER_ENABLED = os.getenv("MAGNET_RESOLVER_ENABLED", str(MAGNET_RESOLVER_ENABLED)).lower() == "true"
+    MAGNET_RESOLVER_TIMEOUT = int(os.getenv("MAGNET_RESOLVER_TIMEOUT", str(MAGNET_RESOLVER_TIMEOUT)))
+    MAGNET_RESOLVER_ENABLE_DHT = os.getenv("MAGNET_RESOLVER_ENABLE_DHT", str(MAGNET_RESOLVER_ENABLE_DHT)).lower() == "true"
+    MAGNET_RESOLVER_PROXY_HOST = os.getenv("MAGNET_RESOLVER_PROXY_HOST", MAGNET_RESOLVER_PROXY_HOST)
+    MAGNET_RESOLVER_PROXY_PORT = int(os.getenv("MAGNET_RESOLVER_PROXY_PORT", "0")) or MAGNET_RESOLVER_PROXY_PORT
+    MAGNET_RESOLVER_HTTP_PROXY = os.getenv("MAGNET_RESOLVER_HTTP_PROXY", MAGNET_RESOLVER_HTTP_PROXY)
 
     @property
     def API_BASE_URL(self):

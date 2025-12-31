@@ -3,6 +3,9 @@ Abstract base class defining the interface for torrent clients.
 
 Both RTorrentClient and TransmissionClient implement this interface,
 allowing them to be used interchangeably through the client factory.
+
+Includes support for torrent labels which can be used to track torrents
+with an id:<torrent_manager_id> label or any other custom labels.
 """
 
 from abc import ABC, abstractmethod
@@ -34,13 +37,14 @@ class BaseTorrentClient(ABC):
         pass
 
     @abstractmethod
-    def add_torrent(self, path: str, start: bool = True) -> bool:
+    def add_torrent(self, path: str, start: bool = True, labels: Optional[List[str]] = None) -> bool:
         """
         Add a torrent from a local .torrent file.
 
         Args:
             path: Path to the .torrent file
             start: Whether to start the torrent immediately
+            labels: Optional list of labels to set on the torrent
 
         Returns:
             True if successful
@@ -48,13 +52,14 @@ class BaseTorrentClient(ABC):
         pass
 
     @abstractmethod
-    def add_torrent_url(self, url: str, start: bool = True) -> bool:
+    def add_torrent_url(self, url: str, start: bool = True, labels: Optional[List[str]] = None) -> bool:
         """
         Add a torrent from a URL to a .torrent file.
 
         Args:
             url: HTTP/HTTPS URL to a .torrent file
             start: Whether to start the torrent immediately
+            labels: Optional list of labels to set on the torrent
 
         Returns:
             True if successful
@@ -62,13 +67,14 @@ class BaseTorrentClient(ABC):
         pass
 
     @abstractmethod
-    def add_magnet(self, uri: str, start: bool = True) -> bool:
+    def add_magnet(self, uri: str, start: bool = True, labels: Optional[List[str]] = None) -> bool:
         """
         Add a torrent from a magnet link.
 
         Args:
             uri: Magnet URI
             start: Whether to start the torrent immediately
+            labels: Optional list of labels to set on the torrent
 
         Returns:
             True if successful
@@ -93,4 +99,59 @@ class BaseTorrentClient(ABC):
     @abstractmethod
     def get_torrent(self, info_hash: str) -> Generator[Dict[str, Any], None, None]:
         """Get information about a specific torrent."""
+        pass
+
+    @abstractmethod
+    def get_labels(self, info_hash: str) -> List[str]:
+        """
+        Get labels for a torrent.
+
+        Args:
+            info_hash: The torrent's info hash
+
+        Returns:
+            List of label strings
+        """
+        pass
+
+    @abstractmethod
+    def set_labels(self, info_hash: str, labels: List[str]) -> Any:
+        """
+        Set labels for a torrent, replacing any existing labels.
+
+        Args:
+            info_hash: The torrent's info hash
+            labels: List of label strings to set
+
+        Returns:
+            Result of the operation
+        """
+        pass
+
+    @abstractmethod
+    def add_label(self, info_hash: str, label: str) -> Any:
+        """
+        Add a label to a torrent without removing existing labels.
+
+        Args:
+            info_hash: The torrent's info hash
+            label: Label string to add
+
+        Returns:
+            Result of the operation
+        """
+        pass
+
+    @abstractmethod
+    def remove_label(self, info_hash: str, label: str) -> Any:
+        """
+        Remove a label from a torrent.
+
+        Args:
+            info_hash: The torrent's info hash
+            label: Label string to remove
+
+        Returns:
+            Result of the operation
+        """
         pass

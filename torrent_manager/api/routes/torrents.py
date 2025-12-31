@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import tempfile
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
@@ -10,9 +11,10 @@ from torrent_manager.logger import logger
 from torrent_manager.magnet_link import MagnetLink
 from torrent_manager.torrent_file import TorrentFile
 from torrent_manager.trackers import get_cached_trackers, is_augmentation_enabled
+from torrent_manager.magnet_resolver import is_resolver_enabled, resolve_magnet, MagnetResolverError
 from torrent_manager.activity import Activity
 from torrent_manager.polling import get_poller
-from ..schemas import AddTorrentRequest, TorrentActionRequest
+from ..schemas import AddTorrentRequest, TorrentActionRequest, SetLabelsRequest, AddLabelRequest
 from ..dependencies import get_current_user, get_user_server, find_torrent_server
 
 router = APIRouter(tags=["torrents"])
@@ -75,6 +77,45 @@ def augment_magnet_with_trackers(magnet_uri: str) -> str:
         return magnet_uri
 
 
+def add_torrent_from_file(client, torrent_path: str, start: bool, labels: list, augment: bool = True) -> bool:
+    """
+    Add a torrent from a .torrent file, optionally augmenting with public trackers.
+
+    Args:
+        client: Torrent client instance
+        torrent_path: Path to the .torrent file
+        start: Whether to start the torrent immediately
+        labels: Labels to apply to the torrent
+        augment: Whether to augment with public trackers
+
+    Returns:
+        True if successful
+    """
+    if augment and is_augmentation_enabled():
+        try:
+            torrent = TorrentFile(torrent_path)
+            if not torrent.is_private:
+                trackers = get_cached_trackers()
+                torrent.add_trackers(trackers)
+                torrent.save(torrent_path)
+                logger.debug(f"Augmented torrent with {len(trackers)} trackers")
+        except Exception as e:
+            logger.warning(f"Failed to augment torrent file: {e}")
+
+    return client.add_torrent(torrent_path, start=start, labels=labels)
+
+
+def _cleanup_torrent_path(torrent_path: Optional[str]):
+    """Clean up a temporary torrent file and its parent directory if applicable."""
+    if not torrent_path:
+        return
+    parent_dir = os.path.dirname(torrent_path)
+    if "magnet_resolve_" in parent_dir:
+        shutil.rmtree(parent_dir, ignore_errors=True)
+    elif os.path.exists(torrent_path):
+        os.remove(torrent_path)
+
+
 @router.post("/torrents")
 async def add_torrent(request: AddTorrentRequest, user: User = Depends(get_current_user)):
     """
@@ -85,10 +126,14 @@ async def add_torrent(request: AddTorrentRequest, user: User = Depends(get_curre
     - Magnet URIs (magnet:?xt=urn:btih:...)
     - HTTP/HTTPS URLs to .torrent files
 
+    Magnet URIs are first converted to .torrent files using magnet2torrent
+    (downloads from cache sites or peers), then uploaded to the server.
+
     Public torrents (magnets, info hashes, or non-private .torrent files) are
     augmented with additional public trackers to speed up peer discovery.
     """
     server = get_user_server(request.server_id, user)
+    torrent_path = None
 
     try:
         client = get_client(server)
@@ -100,15 +145,36 @@ async def add_torrent(request: AddTorrentRequest, user: User = Depends(get_curre
             logger.info(f"Converted info hash to magnet URI")
 
         if uri.startswith("magnet:"):
-            uri = augment_magnet_with_trackers(uri)
-            result = client.add_magnet(uri, start=request.start)
+            # Use magnet resolver to convert magnet to .torrent file
+            if is_resolver_enabled():
+                try:
+                    logger.info(f"Resolving magnet URI to .torrent file")
+                    torrent_path, info_hash = resolve_magnet(uri)
+                    result = add_torrent_from_file(
+                        client, torrent_path,
+                        start=request.start,
+                        labels=request.labels,
+                        augment=True
+                    )
+                except MagnetResolverError as e:
+                    logger.warning(f"Magnet resolution failed, falling back to direct add: {e}")
+                    # Fall back to direct magnet add
+                    uri = augment_magnet_with_trackers(uri)
+                    result = client.add_magnet(uri, start=request.start, labels=request.labels)
+            else:
+                # Resolver disabled, use direct magnet add
+                uri = augment_magnet_with_trackers(uri)
+                result = client.add_magnet(uri, start=request.start, labels=request.labels)
         elif uri.startswith("http://") or uri.startswith("https://"):
-            result = client.add_torrent_url(uri, start=request.start)
+            result = client.add_torrent_url(uri, start=request.start, labels=request.labels)
         else:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Input must be an info hash, magnet link, or HTTP/HTTPS URL"
             )
+
+        # Clean up temporary torrent file and its directory
+        _cleanup_torrent_path(torrent_path)
 
         if result:
             # Immediately poll the server to update cache
@@ -130,12 +196,14 @@ async def add_torrent(request: AddTorrentRequest, user: User = Depends(get_curre
         raise
     except ValueError as e:
         logger.error(f"Invalid torrent: {e}")
+        _cleanup_torrent_path(torrent_path)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except Exception as e:
         logger.error(f"Failed to add torrent: {e}")
+        _cleanup_torrent_path(torrent_path)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to add torrent: {str(e)}"
@@ -418,12 +486,27 @@ async def list_torrent_files(
     # Get file list from torrent
     files = torrent.get("files", [])
     torrent_name = torrent.get("name", "")
-    torrent_path = torrent.get("path", "")
+    torrent_base_path = torrent.get("base_path", "")
 
     # Check if downloads are available (HTTP or local mount)
     http_enabled = bool(server.http_port or server.mount_path) if server else False
     # Check if streaming is available (requires mount_path)
     stream_enabled = bool(server.mount_path) if server else False
+
+    # Compute the base relative path by removing the server's download_dir prefix
+    # e.g., base_path="/home/user/downloads/HASH/data/TorrentName" with
+    # download_dir="/home/user/downloads/" gives "HASH/data/TorrentName"
+    base_rel_path = ""
+    if server and server.download_dir and torrent_base_path:
+        download_dir = server.download_dir.rstrip("/") + "/"
+        if torrent_base_path.startswith(download_dir):
+            base_rel_path = torrent_base_path[len(download_dir):]
+        else:
+            # Fall back to just the torrent name if paths don't match
+            base_rel_path = torrent_name
+    elif torrent_name:
+        # No download_dir configured, fall back to torrent name
+        base_rel_path = torrent_name
 
     # Streamable file extensions
     streamable_exts = {
@@ -441,11 +524,14 @@ async def list_torrent_files(
         }
 
         # Construct the relative path for downloading/streaming
-        # For multi-file torrents, files are in torrent_name/file_path
-        rel_path = f.get("path", "")
+        # For multi-file torrents: base_rel_path/file_path
+        # For single-file torrents: base_rel_path (which is the file)
+        file_path = f.get("path", "")
         is_multi_file = torrent.get("is_multi_file", False)
-        if is_multi_file and torrent_name:
-            rel_path = f"{torrent_name}/{rel_path}"
+        if is_multi_file and base_rel_path:
+            rel_path = f"{base_rel_path}/{file_path}"
+        else:
+            rel_path = base_rel_path if base_rel_path else file_path
 
         # Add download URL if HTTP or local mount is configured
         if http_enabled:
@@ -462,10 +548,131 @@ async def list_torrent_files(
     return {
         "info_hash": info_hash,
         "name": torrent_name,
-        "path": torrent_path,
+        "path": torrent_base_path,
         "server_id": server.id if server else None,
         "server_name": server.name if server else None,
         "http_enabled": http_enabled,
         "stream_enabled": stream_enabled,
         "files": result_files
     }
+
+
+@router.get("/torrents/{info_hash}/labels")
+async def get_torrent_labels(
+    info_hash: str,
+    server_id: Optional[str] = Query(None, description="Server ID"),
+    user: User = Depends(get_current_user)
+):
+    """Get labels for a specific torrent."""
+    if server_id:
+        server = get_user_server(server_id, user)
+        client = get_client(server)
+    else:
+        server, client, _ = find_torrent_server(info_hash, user)
+        if not server:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Torrent not found on any server"
+            )
+
+    try:
+        labels = client.get_labels(info_hash)
+        return {"info_hash": info_hash, "labels": labels, "server_id": server.id}
+    except Exception as e:
+        logger.error(f"Failed to get labels: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get labels: {str(e)}"
+        )
+
+
+@router.put("/torrents/{info_hash}/labels")
+async def set_torrent_labels(
+    info_hash: str,
+    request: SetLabelsRequest,
+    server_id: Optional[str] = Query(None, description="Server ID"),
+    user: User = Depends(get_current_user)
+):
+    """Set all labels for a torrent (replaces existing labels)."""
+    if server_id:
+        server = get_user_server(server_id, user)
+        client = get_client(server)
+    else:
+        server, client, _ = find_torrent_server(info_hash, user)
+        if not server:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Torrent not found on any server"
+            )
+
+    try:
+        result = client.set_labels(info_hash, request.labels)
+        return {"info_hash": info_hash, "labels": request.labels, "server_id": server.id}
+    except Exception as e:
+        logger.error(f"Failed to set labels: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to set labels: {str(e)}"
+        )
+
+
+@router.post("/torrents/{info_hash}/labels")
+async def add_torrent_label(
+    info_hash: str,
+    request: AddLabelRequest,
+    server_id: Optional[str] = Query(None, description="Server ID"),
+    user: User = Depends(get_current_user)
+):
+    """Add a label to a torrent without removing existing labels."""
+    if server_id:
+        server = get_user_server(server_id, user)
+        client = get_client(server)
+    else:
+        server, client, _ = find_torrent_server(info_hash, user)
+        if not server:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Torrent not found on any server"
+            )
+
+    try:
+        result = client.add_label(info_hash, request.label)
+        labels = client.get_labels(info_hash)
+        return {"info_hash": info_hash, "labels": labels, "server_id": server.id}
+    except Exception as e:
+        logger.error(f"Failed to add label: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to add label: {str(e)}"
+        )
+
+
+@router.delete("/torrents/{info_hash}/labels/{label}")
+async def remove_torrent_label(
+    info_hash: str,
+    label: str,
+    server_id: Optional[str] = Query(None, description="Server ID"),
+    user: User = Depends(get_current_user)
+):
+    """Remove a label from a torrent."""
+    if server_id:
+        server = get_user_server(server_id, user)
+        client = get_client(server)
+    else:
+        server, client, _ = find_torrent_server(info_hash, user)
+        if not server:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Torrent not found on any server"
+            )
+
+    try:
+        result = client.remove_label(info_hash, label)
+        labels = client.get_labels(info_hash)
+        return {"info_hash": info_hash, "labels": labels, "server_id": server.id}
+    except Exception as e:
+        logger.error(f"Failed to remove label: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to remove label: {str(e)}"
+        )

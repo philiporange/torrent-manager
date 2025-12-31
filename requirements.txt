@@ -5,7 +5,7 @@ fastapi
 httpx
 libtorrent
 loguru
-magnet2torrent
+-e /home/sam/Code/magnet2torrent
 passlib[bcrypt]
 peewee
 pytest

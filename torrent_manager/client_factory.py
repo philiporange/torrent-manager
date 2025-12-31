@@ -1,8 +1,9 @@
 """
-Factory for creating torrent client instances.
+Factory for creating torrent client instances with configurable timeouts.
 
 Provides a function to create the appropriate client (RTorrentClient or TransmissionClient)
-based on the server configuration stored in the database.
+based on the server configuration stored in the database. Supports configurable connection
+timeouts to prevent blocking on unreachable servers.
 """
 
 from typing import TYPE_CHECKING
@@ -16,12 +17,13 @@ if TYPE_CHECKING:
     from .models import TorrentServer
 
 
-def get_client(server: "TorrentServer") -> BaseTorrentClient:
+def get_client(server: "TorrentServer", timeout: int = 10) -> BaseTorrentClient:
     """
     Create a torrent client instance for the given server configuration.
 
     Args:
         server: TorrentServer model instance with connection details
+        timeout: Connection timeout in seconds (default: 10)
 
     Returns:
         An instance of RTorrentClient or TransmissionClient
@@ -41,7 +43,7 @@ def get_client(server: "TorrentServer") -> BaseTorrentClient:
         else:
             url = f"{protocol}://{server.host}:{server.port}{rpc_path}"
 
-        return RTorrentClient(url=url)
+        return RTorrentClient(url=url, timeout=timeout)
 
     elif server.server_type == "transmission":
         protocol = "https" if server.use_ssl else "http"
@@ -52,7 +54,8 @@ def get_client(server: "TorrentServer") -> BaseTorrentClient:
             port=server.port,
             path=path,
             username=server.username,
-            password=server.password
+            password=server.password,
+            timeout=timeout
         )
 
     else:

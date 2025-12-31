@@ -251,7 +251,8 @@ class TorrentManagerClient:
         self,
         uri: str,
         server_id: str,
-        start: bool = True
+        start: bool = True,
+        labels: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Add a torrent by info hash, magnet URI, or HTTP URL.
@@ -260,12 +261,16 @@ class TorrentManagerClient:
             uri: Info hash (40 hex or 32 base32), magnet URI, or HTTP URL
             server_id: Server to add the torrent to
             start: Start the torrent immediately (default True)
+            labels: Optional list of labels to apply to the torrent
         """
-        return self._request("POST", "/torrents", json={
+        data = {
             "uri": uri,
             "server_id": server_id,
             "start": start
-        })
+        }
+        if labels:
+            data["labels"] = labels
+        return self._request("POST", "/torrents", json=data)
 
     def add_magnet(
         self,

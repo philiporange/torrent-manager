@@ -128,6 +128,8 @@ All torrent endpoints require authentication (session or API key).
 - `GET /torrents` - List all torrents with detailed information
 - `POST /torrents` - Add torrent by magnet URI or HTTP/HTTPS URL
 - `POST /torrents/upload` - Upload and add a .torrent file
+
+**Note on private trackers:** When adding torrents via URL, the torrent manager server downloads the `.torrent` file. Some private trackers validate that the requesting IP matches your account. If you encounter "IP does not match" errors, either register the torrent manager server's IP with the tracker, or use file upload instead (download the `.torrent` in your browser, then upload it).
 - `GET /torrents/{info_hash}` - Get detailed information about a specific torrent
 - `POST /torrents/{info_hash}/start` - Start a paused torrent
 - `POST /torrents/{info_hash}/stop` - Stop/pause a torrent

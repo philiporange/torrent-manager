@@ -59,6 +59,9 @@ class TorrentServer(BaseModel):
     http_use_ssl = BooleanField(default=False)  # Use HTTPS for HTTP downloads
     # Local mount path for sshfs-mounted directory (for direct file access)
     mount_path = CharField(null=True)
+    # Download directory on the server (e.g., "/home/user/downloads/")
+    # Used to compute relative paths for HTTP downloads
+    download_dir = CharField(null=True)
 
 class Session(BaseModel):
     """

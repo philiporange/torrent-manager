@@ -362,6 +362,9 @@ async function openManagementModal(hash, serverId) {
     document.getElementById('mgmtStartBtn').classList.toggle('hidden', t.is_active);
     document.getElementById('mgmtStopBtn').classList.toggle('hidden', !t.is_active);
 
+    // Load labels
+    loadManagementLabels(hash, serverId);
+
     // Load files
     const filesList = document.getElementById('managementFilesList');
     filesList.innerHTML = '<div class="text-center py-6"><i class="fas fa-circle-notch fa-spin text-indigo-500"></i></div>';
@@ -371,6 +374,75 @@ async function openManagementModal(hash, serverId) {
         renderManagementFiles(data);
     } catch (error) {
         filesList.innerHTML = '<div class="text-center py-6 text-slate-400">Unable to load files</div>';
+    }
+}
+
+// Labels management
+async function loadManagementLabels(hash, serverId) {
+    const container = document.getElementById('managementLabels');
+    container.innerHTML = '<span class="text-slate-400 text-sm">Loading...</span>';
+
+    try {
+        const data = await apiRequest(`/torrents/${hash}/labels?server_id=${serverId}`);
+        renderManagementLabels(data.labels);
+    } catch (error) {
+        container.innerHTML = '<span class="text-slate-400 text-sm">Unable to load labels</span>';
+    }
+}
+
+function renderManagementLabels(labels) {
+    const container = document.getElementById('managementLabels');
+
+    if (!labels || labels.length === 0) {
+        container.innerHTML = '<span class="text-slate-400 text-sm">No labels</span>';
+        return;
+    }
+
+    container.innerHTML = labels.map(label => {
+        const safeLabel = label.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        return `
+            <span class="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-indigo-100 text-indigo-700">
+                ${label}
+                <button onclick="mgmtRemoveLabel('${safeLabel}')" class="ml-1 text-indigo-500 hover:text-indigo-800">
+                    <i class="fas fa-times text-xs"></i>
+                </button>
+            </span>
+        `;
+    }).join('');
+}
+
+async function mgmtAddLabel() {
+    if (!currentTorrent) return;
+
+    const input = document.getElementById('newLabelInput');
+    const label = input.value.trim();
+    if (!label) return;
+
+    try {
+        const data = await apiRequest(`/torrents/${currentTorrent.hash}/labels?server_id=${currentTorrent.serverId}`, {
+            method: 'POST',
+            body: JSON.stringify({ label })
+        });
+        renderManagementLabels(data.labels);
+        input.value = '';
+        showToast('Label added');
+    } catch (error) {
+        // Error handled by apiRequest
+    }
+}
+
+async function mgmtRemoveLabel(label) {
+    if (!currentTorrent) return;
+
+    try {
+        const encodedLabel = encodeURIComponent(label);
+        const data = await apiRequest(`/torrents/${currentTorrent.hash}/labels/${encodedLabel}?server_id=${currentTorrent.serverId}`, {
+            method: 'DELETE'
+        });
+        renderManagementLabels(data.labels);
+        showToast('Label removed');
+    } catch (error) {
+        // Error handled by apiRequest
     }
 }
 
@@ -1238,6 +1310,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (pollingEnabled && !document.hidden) loadTorrents();
         }, 15000);
     }
+
+    // Label input enter key
+    document.getElementById('newLabelInput').addEventListener('keypress', e => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            mgmtAddLabel();
+        }
+    });
 
     // Add magnet form
     document.getElementById('addMagnetForm').addEventListener('submit', async e => {

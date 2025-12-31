@@ -1,13 +1,20 @@
 """
-RTorrent XMLRPC client with comprehensive error handling.
+RTorrent XMLRPC client with comprehensive error handling and configurable timeouts.
 
 Provides the RTorrentClient class for interacting with rTorrent via XMLRPC,
 including adding torrents from files/URLs/magnets, managing torrent state,
 and querying torrent information. Features detailed error messages for
-invalid or malformed torrent files.
+invalid or malformed torrent files and configurable connection timeouts
+to prevent blocking on unreachable servers.
+
+Supports both HTTP and HTTPS connections with automatic selection of the
+appropriate transport layer based on the URL scheme.
+
+Labels are stored in d.custom1 (ruTorrent compatible) as comma-separated values.
 """
 
 import os
+import socket
 import tempfile
 import time
 from typing import Any, Dict, Generator, List, Optional
@@ -25,10 +32,40 @@ from .magnet_link import MagnetLink
 RTORRENT_RPC_URL = Config.RTORRENT_RPC_URL
 
 
+class TimeoutTransport(client.Transport):
+    """Custom transport with configurable timeout for HTTP XMLRPC connections."""
+    def __init__(self, timeout=10, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.timeout = timeout
+
+    def make_connection(self, host):
+        conn = super().make_connection(host)
+        conn.timeout = self.timeout
+        return conn
+
+
+class TimeoutSafeTransport(client.SafeTransport):
+    """Custom transport with configurable timeout for HTTPS XMLRPC connections."""
+    def __init__(self, timeout=10, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.timeout = timeout
+
+    def make_connection(self, host):
+        conn = super().make_connection(host)
+        conn.timeout = self.timeout
+        return conn
+
+
 class RTorrentClient(BaseTorrentClient):
-    def __init__(self, url: str = RTORRENT_RPC_URL, view: str = "main"):
+    def __init__(self, url: str = RTORRENT_RPC_URL, view: str = "main", timeout: int = 10):
         self.url = url
-        self.client = client.ServerProxy(url)
+        self.timeout = timeout
+        # Use SafeTransport for HTTPS, Transport for HTTP
+        if url.startswith('https://'):
+            transport = TimeoutSafeTransport(timeout=timeout)
+        else:
+            transport = TimeoutTransport(timeout=timeout)
+        self.client = client.ServerProxy(url, transport=transport)
         self.view = view
 
     def __getattr__(self, name):
@@ -59,7 +96,7 @@ class RTorrentClient(BaseTorrentClient):
                 return False
         return True
 
-    def add_torrent(self, path, start=True, priority=1):
+    def add_torrent(self, path, start=True, priority=1, labels: Optional[List[str]] = None):
         # Get info_hash
         try:
             tf = TorrentFile(path)
@@ -76,8 +113,8 @@ class RTorrentClient(BaseTorrentClient):
             logger.error(f"Unexpected error parsing torrent file: {e}")
             raise ValueError(f"Failed to parse torrent file: {e}")
 
-        info_hash = tf.info_hash
-        
+        info_hash = tf.info_hash()
+
         # Add torrent
         with open(path, "rb") as f:
             data = f.read()
@@ -94,10 +131,19 @@ class RTorrentClient(BaseTorrentClient):
             else:
                 self.set_priority(info_hash, priority)
 
+        # Set labels
+        if labels and result == 0:
+            self.set_labels(info_hash, labels)
+
         return result == 0
 
-    def add_torrent_url(self, url, start=True, priority=1):
-        path = self.download_remote_file(url)
+    def add_torrent_url(self, url, start=True, priority=1, labels: Optional[List[str]] = None):
+        """Add a torrent from a URL by downloading the .torrent file first.
+
+        Note: For private trackers that validate IP addresses, the torrent server's
+        IP must be registered with the tracker, or use file upload instead.
+        """
+        path = self._download_torrent_file(url)
         try:
             tf = TorrentFile(path)
         except InvalidTorrentFileError as e:
@@ -116,18 +162,16 @@ class RTorrentClient(BaseTorrentClient):
             logger.error(f"Unexpected error parsing torrent file from URL: {e}")
             os.remove(path)
             raise ValueError(f"Failed to parse torrent file from URL: {e}")
-        
+
         with open(path, "rb") as f:
             data = f.read()
-        info_hash = tf.info_hash
-    
-        # Add torrent
+        info_hash = tf.info_hash()
+
         if start:
             result = self.client.load.raw_start(self.view, client.Binary(data))
         else:
             result = self.client.load.raw(self.view, client.Binary(data))
 
-        # Set priority
         if priority != 1:
             if self.is_multi_file(info_hash):
                 for i in range(len(tf.files())):
@@ -135,10 +179,14 @@ class RTorrentClient(BaseTorrentClient):
             else:
                 self.set_priority(info_hash, priority)
 
+        # Set labels
+        if labels and result == 0:
+            self.set_labels(info_hash, labels)
+
         os.remove(path)
         return result == 0
     
-    def add_magnet(self, uri, start=True, priority=1):
+    def add_magnet(self, uri, start=True, priority=1, labels: Optional[List[str]] = None):
         """Add a magnet link to rTorrent."""
         try:
             ml = MagnetLink(uri)
@@ -151,8 +199,13 @@ class RTorrentClient(BaseTorrentClient):
 
             if result == 0:
                 logger.debug(f"Added magnet to rTorrent: {info_hash}")
+                # Small delay to let rtorrent register the torrent
+                if priority != 1 or labels:
+                    time.sleep(0.5)
                 if priority != 1:
                     self.set_priority(info_hash, priority)
+                if labels:
+                    self.set_labels(info_hash, labels)
                 return True
 
             logger.error(f"rTorrent rejected magnet: {info_hash}")
@@ -373,18 +426,65 @@ class RTorrentClient(BaseTorrentClient):
         for file_index, priority in priorities:
             self.set_file_priority(info_hash, file_index, priority)
 
-    def download_remote_file(self, url):
-        temp_dir = tempfile.gettempdir()
-        
+    def _download_torrent_file(self, url):
+        """Download a .torrent file from a URL to a temporary file."""
         response = requests.get(url)
         response.raise_for_status()
 
+        temp_dir = tempfile.gettempdir()
         random_name = os.urandom(16).hex()
-        temp_filename = random_name + ".torrent"
-        temp_path = os.path.join(temp_dir, temp_filename)
-        
+        temp_path = os.path.join(temp_dir, random_name + ".torrent")
+
         with open(temp_path, "wb") as f:
-            response = requests.get(url)
             f.write(response.content)
 
         return temp_path
+
+    def get_labels(self, info_hash: str) -> List[str]:
+        """
+        Get labels for a torrent using d.custom1 (ruTorrent compatible).
+
+        Labels are stored as comma-separated values in d.custom1.
+        """
+        try:
+            label_str = self.client.d.custom1(info_hash)
+            if not label_str:
+                return []
+            return [l.strip() for l in label_str.split(',') if l.strip()]
+        except Exception as e:
+            logger.error(f"Failed to get labels for {info_hash}: {e}")
+            return []
+
+    def set_labels(self, info_hash: str, labels: List[str]) -> bool:
+        """
+        Set labels for a torrent using d.custom1 (ruTorrent compatible).
+
+        Labels are stored as comma-separated values in d.custom1.
+        """
+        try:
+            label_str = ','.join(labels)
+            result = self.client.d.custom1.set(info_hash, label_str)
+            return result == 0
+        except Exception as e:
+            logger.error(f"Failed to set labels for {info_hash}: {e}")
+            return False
+
+    def add_label(self, info_hash: str, label: str) -> bool:
+        """Add a label to a torrent without removing existing labels."""
+        labels = self.get_labels(info_hash)
+        if label not in labels:
+            labels.append(label)
+            return self.set_labels(info_hash, labels)
+        return True
+
+    def remove_label(self, info_hash: str, label: str) -> bool:
+        """Remove a label from a torrent."""
+        labels = self.get_labels(info_hash)
+        if label in labels:
+            labels.remove(label)
+            return self.set_labels(info_hash, labels)
+        return True
+
+    def _set_torrent_manager_id(self, info_hash: str, torrent_manager_id: str) -> bool:
+        """Set the torrent manager ID label on a torrent."""
+        return self.add_label(info_hash, f"id:{torrent_manager_id}")

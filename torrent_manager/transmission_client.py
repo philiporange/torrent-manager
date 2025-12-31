@@ -1,8 +1,12 @@
 """
-Transmission RPC client for managing torrents.
+Transmission RPC client for managing torrents with configurable timeouts.
 
 Provides the TransmissionClient class for interacting with Transmission via RPC,
 implementing the same interface as RTorrentClient for interchangeable use.
+Includes configurable connection timeouts to prevent blocking on unreachable servers.
+
+Requires transmission_rpc >= 7.0 which uses get_files() and file_count property.
+Labels are stored using Transmission's native labels field (requires Transmission >= 3.0).
 """
 
 import os
@@ -34,17 +38,20 @@ class TransmissionClient(BaseTorrentClient):
         port: int = TRANSMISSION_PORT,
         path: str = "/transmission/rpc",
         username: Optional[str] = TRANSMISSION_USERNAME,
-        password: Optional[str] = TRANSMISSION_PASSWORD
+        password: Optional[str] = TRANSMISSION_PASSWORD,
+        timeout: int = 10
     ):
         self.host = host
         self.port = port
+        self.timeout = timeout
         self.client = TransmissionRPCClient(
             protocol=protocol,
             host=host,
             port=port,
             path=path,
             username=username or None,
-            password=password or None
+            password=password or None,
+            timeout=timeout
         )
 
     def _get_torrent_by_hash(self, info_hash: str) -> TransmissionTorrent:
@@ -63,11 +70,11 @@ class TransmissionClient(BaseTorrentClient):
             logger.error(f"Failed to connect to Transmission at {self.host}:{self.port}: {e}")
             return False
 
-    def add_torrent(self, path, start=True, priority=1):
+    def add_torrent(self, path, start=True, priority=1, labels: Optional[List[str]] = None):
         tf = TorrentFile(path)
-        info_hash = tf.info_hash
+        info_hash = tf.info_hash()
         file_count = len(tf.files())
-        
+
         params = {
             'paused': not start,
         }
@@ -78,22 +85,35 @@ class TransmissionClient(BaseTorrentClient):
         elif priority == 2:
             params['priority_high'] = list(range(file_count))
 
+        # Set labels (Transmission >= 3.0)
+        if labels:
+            params['labels'] = labels
+
         # Add torrent
         with open(path, "rb") as f:
             torrent_data = f.read()
-        
+
         torrent = self.client.add_torrent(torrent_data, **params)
-        
+
         return torrent is not None
 
-    def add_torrent_url(self, url, start=True, priority=1):
-        path = self.download_remote_file(url)
-        result = self.add_torrent(path, start, priority)
+    def add_torrent_url(self, url, start=True, priority=1, labels: Optional[List[str]] = None):
+        """Add a torrent from a URL by downloading the .torrent file first.
+
+        Note: For private trackers that validate IP addresses, the torrent server's
+        IP must be registered with the tracker, or use file upload instead.
+        """
+        path = self._download_torrent_file(url)
+        result = self.add_torrent(path, start, priority, labels=labels)
         os.remove(path)
         return result
 
-    def add_magnet(self, uri, start=True):
-        torrent = self.client.add_torrent(uri, paused=not start)
+    def add_magnet(self, uri, start=True, labels: Optional[List[str]] = None):
+        params = {'paused': not start}
+        if labels:
+            params['labels'] = labels
+
+        torrent = self.client.add_torrent(uri, **params)
         if not torrent:
             return False
 
@@ -125,7 +145,7 @@ class TransmissionClient(BaseTorrentClient):
 
     def is_multi_file(self, info_hash):
         torrent = self._get_torrent_by_hash(info_hash)
-        return len(torrent.files()) > 1
+        return torrent.file_count > 1
 
     def base_path(self, info_hash):
         torrent = self._get_torrent_by_hash(info_hash)
@@ -147,7 +167,7 @@ class TransmissionClient(BaseTorrentClient):
                 "base_path": torrent.download_dir,
                 "directory": torrent.download_dir,
                 "size": torrent.total_size,
-                "is_multi_file": len(torrent.files()) > 1,
+                "is_multi_file": torrent.file_count > 1,
                 "bytes_done": torrent.progress * torrent.total_size / 100,
                 "state": torrent.status,
                 "is_active": torrent.status in ['downloading', 'seeding'],
@@ -207,7 +227,7 @@ class TransmissionClient(BaseTorrentClient):
 
     def set_priority(self, info_hash, priority):
         torrent = self._get_torrent_by_hash(info_hash)
-        file_count = len(torrent.files())
+        file_count = torrent.file_count
         
         if priority == 0:
             self.client.change_torrent(torrent.id, files_unwanted=list(range(file_count)))
@@ -220,9 +240,10 @@ class TransmissionClient(BaseTorrentClient):
         return self._get_torrent_priority(self._get_torrent_by_hash(info_hash))
 
     def _get_torrent_priority(self, torrent):
-        if all(not file['wanted'] for file in torrent.files()):
+        files = torrent.get_files()
+        if all(not file.selected for file in files):
             return 0
-        elif any(file['priority'] == 'high' for file in torrent.files()):
+        elif any(file.priority == 'high' for file in files):
             return 2
         else:
             return 1
@@ -259,7 +280,7 @@ class TransmissionClient(BaseTorrentClient):
 
     def actual_torrent_path(self, info_hash):
         torrent = self._get_torrent_by_hash(info_hash)
-        if len(torrent.files()) > 1:
+        if torrent.file_count > 1:
             return torrent.download_dir
         else:
             return os.path.join(torrent.download_dir, torrent.name)
@@ -271,14 +292,14 @@ class TransmissionClient(BaseTorrentClient):
 
     def files(self, info_hash):
         torrent = self._get_torrent_by_hash(info_hash)
-        for i, file in enumerate(torrent.files()):
-            priority = 0 if not file['wanted'] else (2 if file['priority'] == 'high' else 1)
+        for i, file in enumerate(torrent.get_files()):
+            priority = 0 if not file.selected else (2 if file.priority == 'high' else 1)
             yield {
                 "index": i,
-                "path": file['name'],
-                "size": file['size'],
+                "path": file.name,
+                "size": file.size,
                 "priority": priority,
-                "progress": file['completed'] / file['size'] if file['size'] > 0 else 0,
+                "progress": file.completed / file.size if file.size > 0 else 0,
             }
 
     def set_file_priority(self, info_hash, file_index, priority):
@@ -302,23 +323,72 @@ class TransmissionClient(BaseTorrentClient):
                 files_normal.append(file_index)
             elif priority == 2:
                 files_high.append(file_index)
-        
-        self.client.change_torrent(torrent.id, 
+
+        self.client.change_torrent(torrent.id,
                                    files_unwanted=files_unwanted,
                                    priority_normal=files_normal,
                                    priority_high=files_high)
 
-    def download_remote_file(self, url):
-        temp_dir = tempfile.gettempdir()
-        
+    def _download_torrent_file(self, url):
+        """Download a .torrent file from a URL to a temporary file."""
         response = requests.get(url)
         response.raise_for_status()
 
+        temp_dir = tempfile.gettempdir()
         random_name = os.urandom(16).hex()
-        temp_filename = random_name + ".torrent"
-        temp_path = os.path.join(temp_dir, temp_filename)
-        
+        temp_path = os.path.join(temp_dir, random_name + ".torrent")
+
         with open(temp_path, "wb") as f:
             f.write(response.content)
 
         return temp_path
+
+    def get_labels(self, info_hash: str) -> List[str]:
+        """
+        Get labels for a torrent using Transmission's labels field.
+
+        Requires Transmission >= 3.0.
+        """
+        try:
+            torrent = self._get_torrent_by_hash(info_hash)
+            labels = getattr(torrent, 'labels', None)
+            if labels is None:
+                return []
+            return list(labels)
+        except Exception as e:
+            logger.error(f"Failed to get labels for {info_hash}: {e}")
+            return []
+
+    def set_labels(self, info_hash: str, labels: List[str]) -> bool:
+        """
+        Set labels for a torrent using Transmission's labels field.
+
+        Requires Transmission >= 3.0.
+        """
+        try:
+            torrent = self._get_torrent_by_hash(info_hash)
+            self.client.change_torrent(torrent.id, labels=labels)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set labels for {info_hash}: {e}")
+            return False
+
+    def add_label(self, info_hash: str, label: str) -> bool:
+        """Add a label to a torrent without removing existing labels."""
+        labels = self.get_labels(info_hash)
+        if label not in labels:
+            labels.append(label)
+            return self.set_labels(info_hash, labels)
+        return True
+
+    def remove_label(self, info_hash: str, label: str) -> bool:
+        """Remove a label from a torrent."""
+        labels = self.get_labels(info_hash)
+        if label in labels:
+            labels.remove(label)
+            return self.set_labels(info_hash, labels)
+        return True
+
+    def _set_torrent_manager_id(self, info_hash: str, torrent_manager_id: str) -> bool:
+        """Set the torrent manager ID label on a torrent."""
+        return self.add_label(info_hash, f"id:{torrent_manager_id}")
