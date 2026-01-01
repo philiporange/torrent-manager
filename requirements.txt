@@ -7,6 +7,7 @@ libtorrent
 loguru
 -e /home/sam/Code/magnet2torrent
 passlib[bcrypt]
+bcrypt<5.0.0
 peewee
 pytest
 pytest-asyncio
