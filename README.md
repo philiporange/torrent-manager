@@ -47,14 +47,11 @@ A Python application for managing torrent client instances with a secure REST AP
 # Install dependencies
 pip install -r requirements.txt
 
-# Start the server (easiest way from project root)
-python run_server.py
-
-# Alternative: Start directly from package
-python -m torrent_manager.server
+# Start the server
+python run.py
 
 # Or with auto-reload for development
-python run_server.py --reload
+python -m torrent_manager.server --reload
 ```
 
 The API will be available at http://localhost:8144 with interactive documentation at http://localhost:8144/docs
@@ -78,7 +75,7 @@ A simple web interface is available for managing torrents through your browser:
 
 ```bash
 # Make sure the API server is running
-python server.py
+python run.py
 
 # Open index.html in your browser
 # Or serve it with a simple HTTP server:
@@ -101,7 +98,7 @@ The web frontend provides:
 Note: For local development without HTTPS, you may need to disable the secure cookie flag:
 ```bash
 export COOKIE_SECURE=false
-python server.py --reload
+python -m torrent_manager.server --reload
 ```
 
 ## API Documentation

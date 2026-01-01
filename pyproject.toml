@@ -7,7 +7,7 @@ name = "torrent-manager"
 version = "0.1.0"
 description = "A Python application for managing torrent client instances with a secure REST API"
 readme = "README.md"
-license = "CC0-1.0"
+license = {text = "CC0-1.0"}
 authors = [
     {name = "Philip Orange", email = "git@philiporange.com"}
 ]
@@ -54,6 +54,7 @@ dev = [
 
 [project.scripts]
 torrent-manager = "torrent_manager.cli:main"
+torrent-manager-server = "torrent_manager.server:main"
 
 [project.urls]
 Homepage = "https://github.com/philiporange/torrent-manager"
