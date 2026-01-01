@@ -6,11 +6,42 @@ Implements secure HTTP-only session cookies with:
 - ITP-safe sliding window (< 7 days)
 - Remember-me tokens for longer-lived authentication
 - Secure, HttpOnly, SameSite=Lax cookies
+- bcrypt password hashing with automatic truncation to 72 bytes
+
+Note: This module includes monkey-patches for bcrypt compatibility:
+- Handles the strict 72-byte password limit in bcrypt 5.0+
+- Adds __about__ attribute for passlib compatibility with bcrypt 4.2.0+
+These patches ensure compatibility with passlib's internal initialization while maintaining security.
 """
 
 import datetime
 import secrets
 from typing import Optional, Tuple
+
+# Monkey-patch bcrypt to handle password length limit and version detection before passlib loads
+# bcrypt 5.0+ enforces strict 72-byte limit which breaks passlib's internal tests
+# bcrypt 4.2.0+ removed __about__ module which breaks passlib's version detection
+import bcrypt as _bcrypt
+_original_hashpw = _bcrypt.hashpw
+
+def _patched_hashpw(password, salt):
+    """Wrap bcrypt.hashpw to automatically truncate passwords to 72 bytes."""
+    if isinstance(password, bytes) and len(password) > 72:
+        password = password[:72]
+    elif isinstance(password, str):
+        password_bytes = password.encode('utf-8')
+        if len(password_bytes) > 72:
+            password = password_bytes[:72]
+    return _original_hashpw(password, salt)
+
+_bcrypt.hashpw = _patched_hashpw
+
+# Add __about__ attribute for passlib compatibility with bcrypt 4.2.0+
+if not hasattr(_bcrypt, '__about__'):
+    class _About:
+        __version__ = _bcrypt.__version__
+    _bcrypt.__about__ = _About()
+
 from passlib.context import CryptContext
 
 from .models import User, Session, RememberMeToken, ApiKey
@@ -18,6 +49,7 @@ from .logger import logger
 
 
 # Password hashing context
+# Note: Using bcrypt without relying on truncate_error since bcrypt 5.0+ enforces 72-byte limit strictly
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
@@ -34,14 +66,35 @@ def generate_secure_token(length: int = 32) -> str:
     return secrets.token_urlsafe(length)
 
 
+def _truncate_password(password: str) -> str:
+    """
+    Truncate password to 72 bytes for bcrypt compatibility.
+
+    Bcrypt has a 72-byte limit. We truncate at the byte level,
+    then decode back to a string, removing any incomplete UTF-8 sequences.
+    """
+    password_bytes = password.encode('utf-8')
+    if len(password_bytes) <= 72:
+        return password
+
+    truncated = password_bytes[:72]
+    while truncated:
+        try:
+            return truncated.decode('utf-8')
+        except UnicodeDecodeError:
+            truncated = truncated[:-1]
+
+    return password[:72]
+
+
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt."""
-    return pwd_context.hash(password)
+    """Hash a password using bcrypt. Truncates to 72 bytes if needed."""
+    return pwd_context.hash(_truncate_password(password))
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a password against its hash. Truncates to 72 bytes if needed."""
+    return pwd_context.verify(_truncate_password(plain_password), hashed_password)
 
 
 class SessionManager:
