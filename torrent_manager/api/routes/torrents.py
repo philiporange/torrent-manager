@@ -421,16 +421,88 @@ async def stop_torrent(
         )
 
 
+def _get_info_hash_folder(server: TorrentServer, remote_path: str, info_hash: str) -> Optional[str]:
+    """
+    Get the local path to the info_hash folder for deletion.
+
+    rTorrent stores data in: download_dir/<INFO_HASH>/data/<TorrentName>
+    This function returns the local mount path to the <INFO_HASH>/ folder.
+
+    Returns None if mount_path is not configured or path doesn't match expected structure.
+    """
+    if not server.mount_path or not server.download_dir or not remote_path:
+        return None
+
+    download_dir = server.download_dir.rstrip("/") + "/"
+    if not remote_path.startswith(download_dir):
+        return None
+
+    # Get relative path: "<HASH>/data/<TorrentName>" or similar
+    relative_path = remote_path[len(download_dir):]
+
+    # Find the info_hash folder in the path (case-insensitive match)
+    parts = relative_path.split("/")
+    for i, part in enumerate(parts):
+        if part.upper() == info_hash.upper():
+            # Return path up to and including the info_hash folder
+            hash_folder = "/".join(parts[:i + 1])
+            local_path = os.path.join(server.mount_path, hash_folder)
+            return _validate_delete_path(server.mount_path, local_path, info_hash)
+
+    # No info_hash folder found - refuse to delete
+    logger.warning(f"No info_hash folder found in path: {remote_path}")
+    return None
+
+
+def _validate_delete_path(mount_path: str, path: str, info_hash: str) -> Optional[str]:
+    """
+    Validate that a path is safe to delete.
+
+    Returns the path if valid, None otherwise.
+    Checks:
+    - No '..' components (path traversal)
+    - Path is within mount_path (not the mount itself or above)
+    - Folder being deleted is named with the info_hash
+    """
+    # Normalize paths to resolve any '..' or symlinks
+    mount_path = os.path.normpath(os.path.realpath(mount_path))
+    path = os.path.normpath(os.path.realpath(path))
+
+    # Check for path traversal attempts
+    if ".." in path:
+        logger.warning(f"Path traversal attempt blocked: {path}")
+        return None
+
+    # Path must start with mount_path
+    if not path.startswith(mount_path + "/"):
+        logger.warning(f"Path not within mount: {path} (mount: {mount_path})")
+        return None
+
+    # Path must not be the mount_path itself
+    if path == mount_path:
+        logger.warning(f"Refusing to delete mount root: {path}")
+        return None
+
+    # The folder being deleted must be named with the info_hash
+    folder_name = os.path.basename(path)
+    if folder_name.upper() != info_hash.upper():
+        logger.warning(f"Folder name '{folder_name}' does not match info_hash '{info_hash}'")
+        return None
+
+    return path
+
+
 @router.delete("/torrents/{info_hash}")
 async def delete_torrent(
     info_hash: str,
     server_id: Optional[str] = Query(None, description="Server ID"),
+    delete_data: bool = Query(False, description="Also delete downloaded files"),
     user: User = Depends(get_current_user)
 ):
     """
     Remove a torrent from the server.
 
-    Note: This does not delete the downloaded files.
+    Use delete_data=true to also delete the downloaded files.
     """
     if server_id:
         server = get_user_server(server_id, user)
@@ -444,13 +516,41 @@ async def delete_torrent(
             )
 
     try:
-        client.erase(info_hash)
+        # For rTorrent, handle data deletion at API level using mount_path
+        # because rTorrent's XMLRPC doesn't support delete-with-data
+        data_path = None
+        if delete_data and server.server_type == "rtorrent" and server.mount_path:
+            try:
+                remote_path = client.base_path(info_hash)
+                data_path = _get_info_hash_folder(server, remote_path, info_hash)
+                logger.debug(f"Will delete info_hash folder: {remote_path} -> {data_path}")
+            except Exception as e:
+                logger.warning(f"Failed to get base path for {info_hash}: {e}")
+
+        # For Transmission, pass delete_data directly (native support)
+        # For rTorrent, pass delete_data=False since we handle it here
+        if server.server_type == "transmission":
+            client.erase(info_hash, delete_data=delete_data)
+        else:
+            client.erase(info_hash, delete_data=False)
+
+        # Delete data for rTorrent using the local mount path
+        if delete_data and data_path and os.path.exists(data_path):
+            try:
+                if os.path.isdir(data_path):
+                    shutil.rmtree(data_path)
+                else:
+                    os.remove(data_path)
+                logger.info(f"Deleted data for {info_hash}: {data_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete data for {info_hash}: {e}")
 
         # Immediately poll the server to update cache
         poller = get_poller()
         await poller.poll_server(server)
 
-        return {"message": "Torrent removed", "info_hash": info_hash, "server_id": server.id}
+        msg = "Torrent and data removed" if delete_data else "Torrent removed"
+        return {"message": msg, "info_hash": info_hash, "server_id": server.id}
     except Exception as e:
         logger.error(f"Failed to remove torrent: {e}")
         raise HTTPException(

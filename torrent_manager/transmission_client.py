@@ -5,11 +5,15 @@ Provides the TransmissionClient class for interacting with Transmission via RPC,
 implementing the same interface as RTorrentClient for interchangeable use.
 Includes configurable connection timeouts to prevent blocking on unreachable servers.
 
+Methods that operate on specific torrents raise ValueError when the torrent is not found,
+ensuring consistent error handling across the API layer.
+
 Requires transmission_rpc >= 7.0 which uses get_files() and file_count property.
 Labels are stored using Transmission's native labels field (requires Transmission >= 3.0).
 """
 
 import os
+import socket
 import tempfile
 from typing import Any, Dict, Generator, List, Optional
 
@@ -44,15 +48,22 @@ class TransmissionClient(BaseTorrentClient):
         self.host = host
         self.port = port
         self.timeout = timeout
-        self.client = TransmissionRPCClient(
-            protocol=protocol,
-            host=host,
-            port=port,
-            path=path,
-            username=username or None,
-            password=password or None,
-            timeout=timeout
-        )
+
+        # Set default socket timeout to ensure connection attempts don't hang
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(timeout)
+        try:
+            self.client = TransmissionRPCClient(
+                protocol=protocol,
+                host=host,
+                port=port,
+                path=path,
+                username=username or None,
+                password=password or None,
+                timeout=timeout
+            )
+        finally:
+            socket.setdefaulttimeout(old_timeout)
 
     def _get_torrent_by_hash(self, info_hash: str) -> TransmissionTorrent:
         torrents = self.client.get_torrents()
@@ -120,24 +131,45 @@ class TransmissionClient(BaseTorrentClient):
         return True
 
     def stop(self, info_hash):
-        torrent = self._get_torrent_by_hash(info_hash)
-        return self.client.stop_torrent(torrent.id)
+        try:
+            torrent = self._get_torrent_by_hash(info_hash)
+            return self.client.stop_torrent(torrent.id)
+        except ValueError:
+            raise ValueError(f"No torrent found with hash {info_hash}")
+        except Exception as e:
+            if 'info-hash not found' in str(e).lower():
+                raise ValueError(f"No torrent found with hash {info_hash}")
+            raise
 
     def stop_all(self):
         for torrent in self.client.get_torrents():
             self.client.stop_torrent(torrent.id)
 
     def start(self, info_hash):
-        torrent = self._get_torrent_by_hash(info_hash)
-        return self.client.start_torrent(torrent.id)
+        try:
+            torrent = self._get_torrent_by_hash(info_hash)
+            return self.client.start_torrent(torrent.id)
+        except ValueError:
+            raise ValueError(f"No torrent found with hash {info_hash}")
+        except Exception as e:
+            if 'info-hash not found' in str(e).lower():
+                raise ValueError(f"No torrent found with hash {info_hash}")
+            raise
 
     def start_all(self):
         for torrent in self.client.get_torrents():
             self.client.start_torrent(torrent.id)
 
     def erase(self, info_hash, delete_data=False):
-        torrent = self._get_torrent_by_hash(info_hash)
-        return self.client.remove_torrent(torrent.id, delete_data=delete_data)
+        try:
+            torrent = self._get_torrent_by_hash(info_hash)
+            return self.client.remove_torrent(torrent.id, delete_data=delete_data)
+        except ValueError:
+            raise ValueError(f"No torrent found with hash {info_hash}")
+        except Exception as e:
+            if 'info-hash not found' in str(e).lower():
+                raise ValueError(f"No torrent found with hash {info_hash}")
+            raise
 
     def erase_all(self, delete_data=False):
         for torrent in self.client.get_torrents():
@@ -156,7 +188,10 @@ class TransmissionClient(BaseTorrentClient):
 
     def list_torrents(self, info_hash=None, files=False) -> Generator[Dict[str, Any], None, None]:
         if info_hash:
-            torrents = [self._get_torrent_by_hash(info_hash)]
+            try:
+                torrents = [self._get_torrent_by_hash(info_hash)]
+            except ValueError:
+                return
         else:
             torrents = self.client.get_torrents()
 

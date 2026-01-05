@@ -9,6 +9,10 @@ for quick retrieval by the frontend. Adjusts polling frequency based on activity
 The cache stores per-server torrent lists with metadata including last poll time
 and activity status. Frontend requests return cached data instead of making
 live RPC calls.
+
+Error handling includes tracking consecutive failures and reducing log noise
+for persistent connection issues. Errors are logged immediately on first failure,
+at 5 consecutive failures, and then every 10 minutes for ongoing issues.
 """
 
 import asyncio
@@ -31,6 +35,8 @@ class ServerCache:
     last_poll: float = 0.0
     has_active_downloads: bool = False
     error: Optional[str] = None
+    consecutive_errors: int = 0
+    last_error_logged: float = 0.0
 
 
 class TorrentPoller:
@@ -54,6 +60,7 @@ class TorrentPoller:
         Returns a ServerCache with the poll results.
         """
         cache = ServerCache(last_poll=time.time())
+        old_cache = self._cache.get(server.id)
 
         try:
             client = get_client(server)
@@ -72,14 +79,39 @@ class TorrentPoller:
             cache.torrents = torrents
             cache.has_active_downloads = has_active_downloads
             cache.error = None
+            cache.consecutive_errors = 0
+            cache.last_error_logged = 0.0
 
         except Exception as e:
-            logger.error(f"Failed to poll server {server.name}: {e}")
             cache.error = str(e)
+
             # Keep old torrents on error if we have them
-            if server.id in self._cache:
-                cache.torrents = self._cache[server.id].torrents
-                cache.has_active_downloads = self._cache[server.id].has_active_downloads
+            if old_cache:
+                cache.torrents = old_cache.torrents
+                cache.has_active_downloads = old_cache.has_active_downloads
+                cache.consecutive_errors = old_cache.consecutive_errors + 1
+                cache.last_error_logged = old_cache.last_error_logged
+            else:
+                cache.consecutive_errors = 1
+
+            # Log errors with reduced frequency for persistent failures
+            # Log first error immediately, then every 10 minutes for persistent failures
+            current_time = time.time()
+            should_log = (
+                cache.consecutive_errors == 1 or
+                cache.consecutive_errors == 5 or  # Log at 5 consecutive failures
+                (current_time - cache.last_error_logged) >= 600  # Log every 10 minutes
+            )
+
+            if should_log:
+                if cache.consecutive_errors == 1:
+                    logger.error(f"Failed to poll server {server.name}: {cache.error}")
+                else:
+                    logger.error(
+                        f"Failed to poll server {server.name} "
+                        f"({cache.consecutive_errors} consecutive failures): {cache.error}"
+                    )
+                cache.last_error_logged = current_time
 
         return cache
 
