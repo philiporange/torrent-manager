@@ -39,9 +39,15 @@ class TimeoutTransport(client.Transport):
         self.timeout = timeout
 
     def make_connection(self, host):
-        conn = super().make_connection(host)
-        conn.timeout = self.timeout
-        return conn
+        # Set default socket timeout before making connection
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(self.timeout)
+        try:
+            conn = super().make_connection(host)
+            conn.timeout = self.timeout
+            return conn
+        finally:
+            socket.setdefaulttimeout(old_timeout)
 
 
 class TimeoutSafeTransport(client.SafeTransport):
@@ -51,9 +57,15 @@ class TimeoutSafeTransport(client.SafeTransport):
         self.timeout = timeout
 
     def make_connection(self, host):
-        conn = super().make_connection(host)
-        conn.timeout = self.timeout
-        return conn
+        # Set default socket timeout before making connection
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(self.timeout)
+        try:
+            conn = super().make_connection(host)
+            conn.timeout = self.timeout
+            return conn
+        finally:
+            socket.setdefaulttimeout(old_timeout)
 
 
 class RTorrentClient(BaseTorrentClient):
@@ -229,12 +241,33 @@ class RTorrentClient(BaseTorrentClient):
         for info_hash in self.list_all_info_hashes():
             self.start(info_hash)
 
-    def erase(self, info_hash, stop_first=True, wait=True):
+    def erase(self, info_hash, stop_first=True, wait=True, delete_data=False):
         if stop_first:
             self.stop(info_hash)
             time.sleep(1)
-        
+
+        # Get the data path before erasing (needed for delete_data)
+        data_path = None
+        if delete_data:
+            try:
+                data_path = self.base_path(info_hash)
+            except Exception as e:
+                logger.warning(f"Failed to get base path for {info_hash}: {e}")
+
         result = self.client.d.erase(info_hash)
+
+        # Delete the data files if requested
+        if delete_data and data_path and os.path.exists(data_path):
+            try:
+                import shutil
+                if os.path.isdir(data_path):
+                    shutil.rmtree(data_path)
+                else:
+                    os.remove(data_path)
+                logger.info(f"Deleted data for {info_hash}: {data_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete data for {info_hash}: {e}")
+
         if wait:
             time.sleep(1)
         return result

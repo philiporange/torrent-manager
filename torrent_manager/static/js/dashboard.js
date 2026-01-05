@@ -3,6 +3,7 @@
  * Displays torrents in a table format with efficient DOM updates.
  * Uses Intersection Observer for lazy row rendering.
  * Supports long-press/double-click to open management modal.
+ * Right-click context menu provides quick access to start/stop/remove/delete.
  * Media player (Plyr) and HLS.js are lazy-loaded only when first used.
  * HLS streaming waits for playlist availability before playback.
  * Transcode progress is shown on the scrubber and seeking is limited.
@@ -13,6 +14,7 @@ let servers = [];
 let torrentCache = {};  // Cache for efficient updates
 let torrentData = {};   // Full torrent data by hash
 let currentTorrent = null;  // Currently selected torrent for management modal
+let contextMenuTorrent = null;  // Currently selected torrent for context menu
 let longPressTimer = null;
 const LONG_PRESS_DURATION = 500;  // ms
 
@@ -66,7 +68,9 @@ async function loadTorrents() {
     }
 
     try {
+        console.log('[LOAD] Fetching torrents from API...');
         const torrents = await apiRequest('/torrents');
+        console.log('[LOAD] Got', torrents.length, 'torrents from API:', torrents.map(t => t.info_hash));
         loadingEl.classList.add('hidden');
 
         // Update stats
@@ -167,6 +171,8 @@ function updateTorrentTable(torrents, tbody) {
     });
 
     // Remove rows that no longer exist and clean up torrentData
+    const removedHashes = Object.keys(existingRows);
+    console.log('[UPDATE] Removing', removedHashes.length, 'rows:', removedHashes);
     for (const hash in existingRows) {
         rowObserver.unobserve(existingRows[hash]);
         existingRows[hash].remove();
@@ -209,6 +215,7 @@ function createPlaceholderRow(t) {
     row.addEventListener('touchstart', (e) => startLongPress(e, t.info_hash, t.server_id), { passive: true });
     row.addEventListener('touchend', cancelLongPress);
     row.addEventListener('touchcancel', cancelLongPress);
+    row.addEventListener('contextmenu', (e) => showContextMenu(e, t.info_hash, t.server_id));
 
     // Empty placeholder cells matching table structure
     row.innerHTML = `
@@ -326,6 +333,94 @@ function cancelLongPress() {
         clearTimeout(longPressTimer);
         longPressTimer = null;
     }
+}
+
+// Context Menu
+function showContextMenu(e, hash, serverId) {
+    e.preventDefault();
+    const t = torrentData[hash];
+    if (!t) return;
+
+    contextMenuTorrent = { hash, serverId };
+    const menu = document.getElementById('contextMenu');
+
+    // Show/hide start/stop based on torrent state
+    document.getElementById('ctxStart').classList.toggle('hidden', t.is_active);
+    document.getElementById('ctxStop').classList.toggle('hidden', !t.is_active);
+
+    // Position the menu
+    const x = e.clientX;
+    const y = e.clientY;
+    menu.style.left = `${x}px`;
+    menu.style.top = `${y}px`;
+    menu.classList.remove('hidden');
+
+    // Adjust if menu goes off screen
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+        menu.style.left = `${window.innerWidth - rect.width - 10}px`;
+    }
+    if (rect.bottom > window.innerHeight) {
+        menu.style.top = `${window.innerHeight - rect.height - 10}px`;
+    }
+}
+
+function hideContextMenu() {
+    document.getElementById('contextMenu').classList.add('hidden');
+    contextMenuTorrent = null;
+}
+
+// Close context menu on click outside or scroll
+document.addEventListener('click', (e) => {
+    const menu = document.getElementById('contextMenu');
+    if (menu && !menu.contains(e.target)) {
+        hideContextMenu();
+    }
+});
+document.addEventListener('scroll', hideContextMenu, true);
+
+// Context menu actions
+async function ctxStart() {
+    if (!contextMenuTorrent) return;
+    hideContextMenu();
+    await startTorrent(contextMenuTorrent.hash, contextMenuTorrent.serverId);
+}
+
+async function ctxStop() {
+    if (!contextMenuTorrent) return;
+    hideContextMenu();
+    await stopTorrent(contextMenuTorrent.hash, contextMenuTorrent.serverId);
+}
+
+function ctxRemove() {
+    if (!contextMenuTorrent) return;
+    currentTorrent = { ...contextMenuTorrent };
+    hideContextMenu();
+    document.getElementById('deleteConfirmModal').classList.remove('hidden');
+}
+
+function ctxDeleteData() {
+    if (!contextMenuTorrent) return;
+    currentTorrent = { ...contextMenuTorrent };
+    hideContextMenu();
+    document.getElementById('deleteDataConfirmModal').classList.remove('hidden');
+}
+
+function closeDeleteDataConfirm() {
+    document.getElementById('deleteDataConfirmModal').classList.add('hidden');
+}
+
+async function confirmDeleteData() {
+    if (!currentTorrent) return;
+    closeDeleteDataConfirm();
+    await removeTorrentWithData(currentTorrent.hash, currentTorrent.serverId);
+}
+
+async function removeTorrentWithData(hash, serverId) {
+    const query = serverId ? `?server_id=${serverId}&delete_data=true` : '?delete_data=true';
+    await apiRequest(`/torrents/${hash}${query}`, { method: 'DELETE' });
+    showToast('Torrent and data removed');
+    await loadTorrents();
 }
 
 // Management Drawer
@@ -1185,9 +1280,15 @@ async function stopTorrent(hash, serverId) {
 
 async function removeTorrent(hash, serverId) {
     const query = serverId ? `?server_id=${serverId}` : '';
-    await apiRequest(`/torrents/${hash}${query}`, { method: 'DELETE' });
+    console.log('[DELETE] Deleting torrent:', hash);
+    const result = await apiRequest(`/torrents/${hash}${query}`, { method: 'DELETE' });
+    console.log('[DELETE] API response:', result);
     showToast('Torrent removed');
-    loadTorrents();
+    console.log('[DELETE] Calling loadTorrents...');
+    await loadTorrents();
+    console.log('[DELETE] loadTorrents complete. Checking if torrent still in DOM...');
+    const stillExists = document.querySelector(`[data-hash="${hash}"]`);
+    console.log('[DELETE] Row still in DOM:', !!stillExists);
 }
 
 async function addTorrentFile(file) {

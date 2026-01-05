@@ -92,8 +92,17 @@ class BaseTorrentClient(ABC):
         pass
 
     @abstractmethod
-    def erase(self, info_hash: str) -> Any:
-        """Remove a torrent from the client."""
+    def erase(self, info_hash: str, delete_data: bool = False) -> Any:
+        """
+        Remove a torrent from the client.
+
+        Args:
+            info_hash: The torrent's info hash
+            delete_data: Whether to also delete downloaded files
+
+        Returns:
+            Result of the operation
+        """
         pass
 
     @abstractmethod
