@@ -1,7 +1,18 @@
+"""Admin API routes for user management and log streaming.
+
+Provides administrative endpoints for:
+- User CRUD operations (list, create, update, delete)
+- Real-time log streaming via WebSocket with proper disconnect handling
+- Admin console page serving
+
+All routes require admin authentication except the WebSocket endpoint which
+validates the session cookie manually due to WebSocket auth limitations.
+"""
 import asyncio
 import os
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket
 from fastapi.responses import FileResponse
+from starlette.websockets import WebSocketDisconnect
 from torrent_manager.auth import UserManager, SessionManager
 from torrent_manager.models import User
 from torrent_manager.config import Config
@@ -110,7 +121,7 @@ async def websocket_logs(websocket: WebSocket):
             lines = f.readlines()[-20:]
             for line in lines:
                 await websocket.send_text(line.strip())
-            
+
             # Tail the file
             f.seek(0, os.SEEK_END)
             while True:
@@ -119,9 +130,14 @@ async def websocket_logs(websocket: WebSocket):
                     await websocket.send_text(line.strip())
                 else:
                     await asyncio.sleep(0.5)
+    except WebSocketDisconnect:
+        pass
     except Exception as e:
-        await websocket.send_text(f"Error reading log: {e}")
-        await websocket.close()
+        try:
+            await websocket.send_text(f"Error reading log: {e}")
+            await websocket.close()
+        except RuntimeError:
+            pass
 
 
 @router.get("/admin/console")

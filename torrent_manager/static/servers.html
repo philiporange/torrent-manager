@@ -8,7 +8,12 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link href="/static/style.css" rel="stylesheet">
-    <style>body { font-family: 'Inter', sans-serif; }</style>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .section-toggle { cursor: pointer; user-select: none; }
+        .section-content { transition: max-height 0.2s ease-out; }
+        .section-content.collapsed { max-height: 0; overflow: hidden; padding-top: 0; padding-bottom: 0; }
+    </style>
 </head>
 <body class="h-full">
 
@@ -24,11 +29,10 @@
             </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div class="grid grid-cols-1 xl:grid-cols-3 gap-8">
             <!-- Server List -->
-            <div class="lg:col-span-2 space-y-6">
+            <div class="xl:col-span-2 space-y-6">
                 <div id="serversList" class="space-y-4">
-                    <!-- Servers injected here -->
                     <div class="text-center py-12">
                         <i class="fas fa-circle-notch fa-spin text-indigo-500 text-3xl"></i>
                     </div>
@@ -36,133 +40,194 @@
             </div>
 
             <!-- Add/Edit Form -->
-            <div class="lg:col-span-1">
-                <div id="formContainer" class="bg-white shadow rounded-xl border border-slate-200 p-6 sticky top-24">
-                    <h3 id="formTitle" class="text-lg font-medium leading-6 text-slate-900 mb-4">Add New Server</h3>
-                    
-                    <form id="serverForm" class="space-y-4">
+            <div class="xl:col-span-1">
+                <div id="formContainer" class="bg-white shadow rounded-xl border border-slate-200 sticky top-6">
+                    <div class="p-5 border-b border-slate-200">
+                        <h3 id="formTitle" class="text-lg font-semibold text-slate-900">Add New Server</h3>
+                    </div>
+
+                    <form id="serverForm" class="p-5 space-y-5">
                         <input type="hidden" id="editingServerId">
-                        
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Friendly Name</label>
-                            <input type="text" name="name" required class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border" placeholder="My Seedbox">
-                        </div>
 
-                        <div class="grid grid-cols-2 gap-4">
+                        <!-- Basic Configuration -->
+                        <div class="space-y-4">
                             <div>
-                                <label class="block text-sm font-medium text-slate-700">Type</label>
-                                <select name="server_type" required class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-2 border bg-white">
-                                    <option value="rtorrent">rTorrent</option>
-                                    <option value="transmission">Transmission</option>
-                                </select>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">Server Name</label>
+                                <input type="text" name="name" required class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="My Seedbox">
                             </div>
+
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-1">Type</label>
+                                    <select name="server_type" required class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-2 border bg-white">
+                                        <option value="rtorrent">rTorrent</option>
+                                        <option value="transmission">Transmission</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-1">Port</label>
+                                    <input type="number" name="port" required class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="80">
+                                </div>
+                            </div>
+
                             <div>
-                                <label class="block text-sm font-medium text-slate-700">Port</label>
-                                <input type="number" name="port" required class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border" placeholder="80">
+                                <label class="block text-sm font-medium text-slate-700 mb-1">Host / IP</label>
+                                <input type="text" name="host" required class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="192.168.1.100">
                             </div>
-                        </div>
 
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">Host / IP</label>
-                            <input type="text" name="host" required class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border" placeholder="192.168.1.100">
-                        </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-1">Username</label>
+                                    <input type="text" name="username" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-1">Password</label>
+                                    <input type="password" name="password" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border">
+                                </div>
+                            </div>
 
-                        <div class="grid grid-cols-2 gap-4">
                             <div>
-                                <label class="block text-sm font-medium text-slate-700">Username <span class="text-slate-400 text-xs">(opt)</span></label>
-                                <input type="text" name="username" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border">
+                                <label class="block text-sm font-medium text-slate-700 mb-1">RPC Path</label>
+                                <input type="text" name="rpc_path" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="/RPC2">
                             </div>
-                            <div>
-                                <label class="block text-sm font-medium text-slate-700">Password <span class="text-slate-400 text-xs">(opt)</span></label>
-                                <input type="password" name="password" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border">
+
+                            <div class="flex items-center gap-2">
+                                <input id="use_ssl" name="use_ssl" type="checkbox" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-slate-300 rounded">
+                                <label for="use_ssl" class="text-sm text-slate-700">Use SSL (HTTPS)</label>
                             </div>
                         </div>
 
-                        <div>
-                            <label class="block text-sm font-medium text-slate-700">RPC Path <span class="text-slate-400 text-xs">(opt, e.g., /RPC2)</span></label>
-                            <input type="text" name="rpc_path" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border">
-                        </div>
+                        <!-- Auto-Download Configuration -->
+                        <div class="border-t border-slate-200 pt-4">
+                            <div class="section-toggle flex items-center justify-between mb-3" onclick="toggleSection('autoDownloadSection')">
+                                <h4 class="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                                    <i class="fas fa-cloud-download-alt text-indigo-500"></i>
+                                    Auto-Download
+                                </h4>
+                                <i id="autoDownloadSection-icon" class="fas fa-chevron-down text-slate-400 text-xs transition-transform"></i>
+                            </div>
+                            <div id="autoDownloadSection" class="section-content space-y-3">
+                                <div class="flex items-center gap-2 p-3 bg-slate-50 rounded-lg">
+                                    <input id="auto_download_enabled" name="auto_download_enabled" type="checkbox" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-slate-300 rounded">
+                                    <label for="auto_download_enabled" class="text-sm text-slate-700">Enable auto-download on completion</label>
+                                </div>
 
-                        <div class="flex items-center">
-                            <input id="use_ssl" name="use_ssl" type="checkbox" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-slate-300 rounded">
-                            <label for="use_ssl" class="ml-2 block text-sm text-slate-900">Use SSL (HTTPS)</label>
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-1">Local Download Path</label>
+                                    <input type="text" name="auto_download_path" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="/data/downloads">
+                                    <p class="mt-1 text-xs text-slate-400">Where to save downloaded files locally</p>
+                                </div>
+
+                                <div class="p-3 bg-rose-50 rounded-lg">
+                                    <div class="flex items-center gap-2">
+                                        <input id="auto_delete_remote" name="auto_delete_remote" type="checkbox" class="h-4 w-4 text-rose-600 focus:ring-rose-500 border-slate-300 rounded">
+                                        <label for="auto_delete_remote" class="text-sm text-slate-700">Delete remote when seeding completes</label>
+                                    </div>
+                                    <p class="mt-1 text-xs text-slate-500 ml-6">Files will be deleted after the torrent stops seeding</p>
+                                </div>
+
+                                <div class="border-t border-slate-100 pt-3 mt-3">
+                                    <p class="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">SSH Configuration</p>
+
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block text-sm font-medium text-slate-700 mb-1">SSH Host</label>
+                                            <input type="text" name="ssh_host" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="Same as main host">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-slate-700 mb-1">SSH Port</label>
+                                            <input type="number" name="ssh_port" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="22" value="22">
+                                        </div>
+                                    </div>
+
+                                    <div class="mt-3">
+                                        <label class="block text-sm font-medium text-slate-700 mb-1">SSH Username</label>
+                                        <input type="text" name="ssh_user" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="root">
+                                    </div>
+
+                                    <div class="mt-3">
+                                        <label class="block text-sm font-medium text-slate-700 mb-1">SSH Key Path</label>
+                                        <input type="text" name="ssh_key_path" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="/home/user/.ssh/id_rsa">
+                                        <p class="mt-1 text-xs text-slate-400">Path to SSH private key on this server</p>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- HTTP Download Configuration -->
-                        <div class="border-t border-slate-200 pt-4 mt-4">
-                            <h4 class="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
-                                <i class="fas fa-download text-slate-400"></i>
-                                HTTP Downloads <span class="text-slate-400 text-xs">(optional)</span>
-                            </h4>
-
-                            <div class="space-y-4">
-                                <div class="grid grid-cols-2 gap-4">
+                        <div class="border-t border-slate-200 pt-4">
+                            <div class="section-toggle flex items-center justify-between mb-3" onclick="toggleSection('httpSection')">
+                                <h4 class="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                                    <i class="fas fa-download text-emerald-500"></i>
+                                    HTTP Downloads
+                                </h4>
+                                <i id="httpSection-icon" class="fas fa-chevron-down text-slate-400 text-xs transition-transform"></i>
+                            </div>
+                            <div id="httpSection" class="section-content space-y-3">
+                                <div class="grid grid-cols-2 gap-3">
                                     <div>
-                                        <label class="block text-sm font-medium text-slate-700">HTTP Host <span class="text-slate-400 text-xs">(opt)</span></label>
-                                        <input type="text" name="http_host" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border" placeholder="Same as main host">
+                                        <label class="block text-sm font-medium text-slate-700 mb-1">HTTP Host</label>
+                                        <input type="text" name="http_host" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="Same as main">
                                     </div>
                                     <div>
-                                        <label class="block text-sm font-medium text-slate-700">HTTP Port</label>
-                                        <input type="number" name="http_port" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border" placeholder="80">
+                                        <label class="block text-sm font-medium text-slate-700 mb-1">HTTP Port</label>
+                                        <input type="number" name="http_port" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="80">
                                     </div>
                                 </div>
 
                                 <div>
-                                    <label class="block text-sm font-medium text-slate-700">HTTP Path <span class="text-slate-400 text-xs">(e.g., /downloads/)</span></label>
-                                    <input type="text" name="http_path" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border" placeholder="/">
+                                    <label class="block text-sm font-medium text-slate-700 mb-1">HTTP Path</label>
+                                    <input type="text" name="http_path" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="/downloads/">
                                 </div>
 
-                                <div class="grid grid-cols-2 gap-4">
+                                <div class="grid grid-cols-2 gap-3">
                                     <div>
-                                        <label class="block text-sm font-medium text-slate-700">HTTP Username <span class="text-slate-400 text-xs">(opt)</span></label>
-                                        <input type="text" name="http_username" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border">
+                                        <label class="block text-sm font-medium text-slate-700 mb-1">HTTP Username</label>
+                                        <input type="text" name="http_username" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border">
                                     </div>
                                     <div>
-                                        <label class="block text-sm font-medium text-slate-700">HTTP Password <span class="text-slate-400 text-xs">(opt)</span></label>
-                                        <input type="password" name="http_password" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border">
+                                        <label class="block text-sm font-medium text-slate-700 mb-1">HTTP Password</label>
+                                        <input type="password" name="http_password" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border">
                                     </div>
                                 </div>
 
-                                <div class="flex items-center">
+                                <div class="flex items-center gap-2">
                                     <input id="http_use_ssl" name="http_use_ssl" type="checkbox" class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-slate-300 rounded">
-                                    <label for="http_use_ssl" class="ml-2 block text-sm text-slate-900">Use SSL for HTTP Downloads</label>
+                                    <label for="http_use_ssl" class="text-sm text-slate-700">Use SSL for HTTP</label>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- Local Mount Configuration -->
-                        <div class="border-t border-slate-200 pt-4 mt-4">
-                            <h4 class="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
-                                <i class="fas fa-folder-tree text-slate-400"></i>
-                                Local Mount <span class="text-slate-400 text-xs">(optional)</span>
-                            </h4>
+                        <!-- Local Mount & Paths -->
+                        <div class="border-t border-slate-200 pt-4">
+                            <div class="section-toggle flex items-center justify-between mb-3" onclick="toggleSection('pathsSection')">
+                                <h4 class="text-sm font-semibold text-slate-800 flex items-center gap-2">
+                                    <i class="fas fa-folder-tree text-violet-500"></i>
+                                    Paths & Mounts
+                                </h4>
+                                <i id="pathsSection-icon" class="fas fa-chevron-down text-slate-400 text-xs transition-transform"></i>
+                            </div>
+                            <div id="pathsSection" class="section-content space-y-3">
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-1">Local Mount Path</label>
+                                    <input type="text" name="mount_path" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="/mnt/seedbox">
+                                    <p class="mt-1 text-xs text-slate-400">SSHFS mount point for direct file access</p>
+                                </div>
 
-                            <div>
-                                <label class="block text-sm font-medium text-slate-700">Mount Path <span class="text-slate-400 text-xs">(sshfs mount point)</span></label>
-                                <input type="text" name="mount_path" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border" placeholder="/mnt/seedbox">
-                                <p class="mt-1 text-xs text-slate-400">Local path to sshfs-mounted download directory for faster file access</p>
+                                <div>
+                                    <label class="block text-sm font-medium text-slate-700 mb-1">Remote Download Directory</label>
+                                    <input type="text" name="download_dir" class="block w-full rounded-lg border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 text-sm h-10 px-3 border" placeholder="/home/user/downloads/">
+                                    <p class="mt-1 text-xs text-slate-400">Download directory on remote server</p>
+                                </div>
                             </div>
                         </div>
 
-                        <!-- Download Directory Configuration -->
-                        <div class="border-t border-slate-200 pt-4 mt-4">
-                            <h4 class="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
-                                <i class="fas fa-hard-drive text-slate-400"></i>
-                                Download Directory <span class="text-slate-400 text-xs">(for path mapping)</span>
-                            </h4>
-
-                            <div>
-                                <label class="block text-sm font-medium text-slate-700">Server Download Dir</label>
-                                <input type="text" name="download_dir" class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-10 px-3 border" placeholder="/home/user/downloads/">
-                                <p class="mt-1 text-xs text-slate-400">The download directory on the remote server, used to compute correct file paths for HTTP downloads</p>
-                            </div>
-                        </div>
-
-                        <div class="pt-2 flex gap-3">
-                            <button type="submit" class="flex-1 flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
-                                <i class="fas fa-plus mr-2 mt-0.5"></i> <span id="submitBtnText">Add Server</span>
+                        <!-- Form Actions -->
+                        <div class="pt-4 border-t border-slate-200 flex gap-3">
+                            <button type="submit" class="flex-1 flex justify-center items-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors">
+                                <i class="fas fa-plus mr-2"></i> <span id="submitBtnText">Add Server</span>
                             </button>
-                            <button type="button" onclick="resetForm()" class="flex-none py-2 px-4 border border-slate-300 rounded-md shadow-sm text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 focus:outline-none transition-colors">
+                            <button type="button" onclick="resetForm()" class="py-2.5 px-4 border border-slate-300 rounded-lg shadow-sm text-sm font-medium text-slate-700 bg-white hover:bg-slate-50 focus:outline-none transition-colors">
                                 Reset
                             </button>
                         </div>
@@ -194,12 +259,10 @@
                         <h3 class="text-lg leading-6 font-medium text-slate-900">File Browser</h3>
                     </div>
 
-                    <!-- Breadcrumb -->
                     <div id="fileBreadcrumb" class="text-sm text-slate-600 mb-4 pb-3 border-b border-slate-200">
                         <span class="cursor-pointer text-indigo-600 hover:underline" onclick="loadFiles('')">Root</span>
                     </div>
 
-                    <!-- Files List -->
                     <div id="filesList" class="max-h-96 overflow-y-auto divide-y divide-slate-100">
                         <div class="text-center py-8"><i class="fas fa-circle-notch fa-spin text-indigo-500 text-2xl"></i></div>
                     </div>

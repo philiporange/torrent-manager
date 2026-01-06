@@ -4,7 +4,7 @@ import shutil
 import tempfile
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
-from torrent_manager.models import TorrentServer, User
+from torrent_manager.models import TorrentServer, TransferJob, UserTorrentSettings, User
 from torrent_manager.client_factory import get_client
 from torrent_manager.config import Config
 from torrent_manager.logger import logger
@@ -14,7 +14,11 @@ from torrent_manager.trackers import get_cached_trackers, is_augmentation_enable
 from torrent_manager.magnet_resolver import is_resolver_enabled, resolve_magnet, MagnetResolverError
 from torrent_manager.activity import Activity
 from torrent_manager.polling import get_poller
-from ..schemas import AddTorrentRequest, TorrentActionRequest, SetLabelsRequest, AddLabelRequest
+from torrent_manager.callbacks import dispatch_event, TorrentEvent
+from ..schemas import (
+    AddTorrentRequest, TorrentActionRequest, SetLabelsRequest, AddLabelRequest,
+    StartTransferRequest, UpdateTorrentSettingsRequest
+)
 from ..dependencies import get_current_user, get_user_server, find_torrent_server
 
 router = APIRouter(tags=["torrents"])
@@ -181,6 +185,13 @@ async def add_torrent(request: AddTorrentRequest, user: User = Depends(get_curre
             poller = get_poller()
             await poller.poll_server(server)
 
+            # Dispatch callback for newly added torrent
+            torrents = poller.get_cached_torrents(user.id, server.id)
+            for t in torrents:
+                if uri.upper() in t.get("info_hash", "").upper() or t.get("name", "") in uri:
+                    await dispatch_event(TorrentEvent.ADDED, t)
+                    break
+
             return {
                 "message": "Torrent added successfully",
                 "uri": uri,
@@ -260,6 +271,12 @@ async def upload_torrent(
             # Immediately poll the server to update cache
             poller = get_poller()
             await poller.poll_server(server)
+
+            # Dispatch callback for newly added torrent
+            torrents = poller.get_cached_torrents(user.id, server.id)
+            if torrents:
+                # The most recently added torrent is likely the one we just uploaded
+                await dispatch_event(TorrentEvent.ADDED, torrents[-1])
 
             return {
                 "message": "Torrent uploaded and added successfully",
@@ -378,6 +395,13 @@ async def start_torrent(
         poller = get_poller()
         await poller.poll_server(server)
 
+        # Dispatch started callback
+        torrents = poller.get_cached_torrents(user.id, server.id)
+        for t in torrents:
+            if t.get("info_hash", "").upper() == info_hash.upper():
+                await dispatch_event(TorrentEvent.STARTED, t)
+                break
+
         return {"message": "Torrent started", "info_hash": info_hash, "server_id": server.id}
     except Exception as e:
         logger.error(f"Failed to start torrent: {e}")
@@ -411,6 +435,13 @@ async def stop_torrent(
         # Immediately poll the server to update cache
         poller = get_poller()
         await poller.poll_server(server)
+
+        # Dispatch stopped callback
+        torrents = poller.get_cached_torrents(user.id, server.id)
+        for t in torrents:
+            if t.get("info_hash", "").upper() == info_hash.upper():
+                await dispatch_event(TorrentEvent.STOPPED, t)
+                break
 
         return {"message": "Torrent stopped", "info_hash": info_hash, "server_id": server.id}
     except Exception as e:
@@ -516,6 +547,14 @@ async def delete_torrent(
             )
 
     try:
+        # Capture torrent info before deletion for callback
+        poller = get_poller()
+        torrents = poller.get_cached_torrents(user.id, server.id)
+        torrent_info = next(
+            (t for t in torrents if t.get("info_hash", "").upper() == info_hash.upper()),
+            None
+        )
+
         # For rTorrent, handle data deletion at API level using mount_path
         # because rTorrent's XMLRPC doesn't support delete-with-data
         data_path = None
@@ -546,8 +585,11 @@ async def delete_torrent(
                 logger.error(f"Failed to delete data for {info_hash}: {e}")
 
         # Immediately poll the server to update cache
-        poller = get_poller()
         await poller.poll_server(server)
+
+        # Dispatch removed callback with the info we captured before deletion
+        if torrent_info:
+            await dispatch_event(TorrentEvent.REMOVED, torrent_info)
 
         msg = "Torrent and data removed" if delete_data else "Torrent removed"
         return {"message": msg, "info_hash": info_hash, "server_id": server.id}
@@ -776,3 +818,252 @@ async def remove_torrent_label(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to remove label: {str(e)}"
         )
+
+
+# === Transfer Endpoints ===
+
+@router.get("/transfers")
+async def list_transfers(
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status"),
+    server_id: Optional[str] = Query(None, description="Filter by server"),
+    user: User = Depends(get_current_user)
+):
+    """
+    List all transfer jobs for the current user.
+
+    Optionally filter by status (pending, running, completed, failed, cancelled)
+    or by server_id.
+    """
+    query = TransferJob.select().where(TransferJob.user_id == user.id)
+
+    if status_filter:
+        query = query.where(TransferJob.status == status_filter)
+    if server_id:
+        query = query.where(TransferJob.server_id == server_id)
+
+    jobs = list(query.order_by(TransferJob.created_at.desc()).limit(100))
+
+    return [
+        {
+            "id": j.id,
+            "server_id": j.server_id,
+            "torrent_hash": j.torrent_hash,
+            "torrent_name": j.torrent_name,
+            "remote_path": j.remote_path,
+            "local_path": j.local_path,
+            "status": j.status,
+            "progress_percent": j.progress_percent,
+            "progress_bytes": j.progress_bytes,
+            "total_bytes": j.total_bytes,
+            "created_at": j.created_at.isoformat() if j.created_at else None,
+            "started_at": j.started_at.isoformat() if j.started_at else None,
+            "completed_at": j.completed_at.isoformat() if j.completed_at else None,
+            "error": j.error,
+            "retry_count": j.retry_count,
+            "max_retries": j.max_retries,
+            "auto_delete_after": j.auto_delete_after,
+            "triggered_by": j.triggered_by
+        }
+        for j in jobs
+    ]
+
+
+@router.post("/transfers")
+async def start_transfer(
+    request: StartTransferRequest,
+    user: User = Depends(get_current_user)
+):
+    """
+    Manually trigger a file transfer for a completed torrent.
+
+    Downloads the torrent data from the remote server to local storage
+    using rsync over SSH.
+    """
+    server = get_user_server(request.server_id, user)
+
+    # Get torrent info from cache
+    poller = get_poller()
+    torrents = poller.get_cached_torrents(user.id, request.server_id)
+
+    torrent = next(
+        (t for t in torrents if t["info_hash"].upper() == request.torrent_hash.upper()),
+        None
+    )
+
+    if not torrent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Torrent not found"
+        )
+
+    if not torrent.get("complete"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Torrent is not complete"
+        )
+
+    from torrent_manager.transfer import get_transfer_service
+    transfer_service = get_transfer_service()
+    job = transfer_service.queue_transfer(
+        server=server,
+        torrent=torrent,
+        user_id=user.id,
+        triggered_by="manual",
+        download_path_override=request.download_path
+    )
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Transfer already in progress or no download path configured"
+        )
+
+    return {"message": "Transfer queued", "job_id": job.id}
+
+
+@router.get("/transfers/{job_id}")
+async def get_transfer(
+    job_id: str,
+    user: User = Depends(get_current_user)
+):
+    """Get details of a specific transfer job."""
+    job = TransferJob.get_or_none(
+        (TransferJob.id == job_id) &
+        (TransferJob.user_id == user.id)
+    )
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Transfer job not found"
+        )
+
+    return {
+        "id": job.id,
+        "server_id": job.server_id,
+        "torrent_hash": job.torrent_hash,
+        "torrent_name": job.torrent_name,
+        "remote_path": job.remote_path,
+        "local_path": job.local_path,
+        "status": job.status,
+        "progress_percent": job.progress_percent,
+        "progress_bytes": job.progress_bytes,
+        "total_bytes": job.total_bytes,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "error": job.error,
+        "retry_count": job.retry_count,
+        "max_retries": job.max_retries,
+        "auto_delete_after": job.auto_delete_after,
+        "triggered_by": job.triggered_by
+    }
+
+
+@router.delete("/transfers/{job_id}")
+async def cancel_transfer(
+    job_id: str,
+    user: User = Depends(get_current_user)
+):
+    """Cancel a pending or running transfer job."""
+    job = TransferJob.get_or_none(
+        (TransferJob.id == job_id) &
+        (TransferJob.user_id == user.id)
+    )
+
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Transfer job not found"
+        )
+
+    if job.status not in ("pending", "running"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot cancel job with status: {job.status}"
+        )
+
+    job.status = "cancelled"
+    job.save()
+
+    # If running, the TransferService will handle the cancellation
+    from torrent_manager.transfer import get_transfer_service
+    transfer_service = get_transfer_service()
+    if job.id in transfer_service._active_jobs:
+        transfer_service._active_jobs[job.id].cancel()
+
+    return {"message": "Transfer cancelled", "job_id": job.id}
+
+
+# === Per-Torrent Settings Endpoints ===
+
+@router.get("/torrents/{info_hash}/settings")
+async def get_torrent_settings(
+    info_hash: str,
+    server_id: str = Query(..., description="Server ID"),
+    user: User = Depends(get_current_user)
+):
+    """
+    Get per-torrent download settings.
+
+    Returns both the per-torrent overrides (if any) and the server defaults.
+    """
+    server = get_user_server(server_id, user)
+
+    settings = UserTorrentSettings.get_or_none(
+        (UserTorrentSettings.user_id == user.id) &
+        (UserTorrentSettings.server_id == server_id) &
+        (UserTorrentSettings.torrent_hash == info_hash.upper())
+    )
+
+    return {
+        "info_hash": info_hash,
+        "server_id": server_id,
+        "download_path": settings.download_path if settings else None,
+        "auto_download": settings.auto_download if settings else None,
+        "auto_delete_remote": settings.auto_delete_remote if settings else None,
+        "server_defaults": {
+            "auto_download_enabled": server.auto_download_enabled,
+            "auto_download_path": server.auto_download_path,
+            "auto_delete_remote": server.auto_delete_remote
+        }
+    }
+
+
+@router.put("/torrents/{info_hash}/settings")
+async def update_torrent_settings(
+    info_hash: str,
+    request: UpdateTorrentSettingsRequest,
+    server_id: str = Query(..., description="Server ID"),
+    user: User = Depends(get_current_user)
+):
+    """
+    Update per-torrent download settings.
+
+    These settings override the server defaults for this specific torrent.
+    Set a field to null to inherit from server defaults.
+    """
+    server = get_user_server(server_id, user)
+
+    settings, created = UserTorrentSettings.get_or_create(
+        user_id=user.id,
+        server_id=server_id,
+        torrent_hash=info_hash.upper()
+    )
+
+    if request.download_path is not None:
+        settings.download_path = request.download_path if request.download_path else None
+    if request.auto_download is not None:
+        settings.auto_download = request.auto_download
+    if request.auto_delete_remote is not None:
+        settings.auto_delete_remote = request.auto_delete_remote
+
+    settings.save()
+
+    return {
+        "info_hash": info_hash,
+        "server_id": server_id,
+        "download_path": settings.download_path,
+        "auto_download": settings.auto_download,
+        "auto_delete_remote": settings.auto_delete_remote
+    }

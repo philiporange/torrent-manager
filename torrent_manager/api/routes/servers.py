@@ -69,7 +69,14 @@ async def add_server(request: AddServerRequest, user: User = Depends(get_current
         http_password=request.http_password,
         http_use_ssl=request.http_use_ssl,
         mount_path=request.mount_path,
-        download_dir=request.download_dir
+        download_dir=request.download_dir,
+        auto_download_enabled=request.auto_download_enabled,
+        auto_download_path=request.auto_download_path,
+        auto_delete_remote=request.auto_delete_remote,
+        ssh_host=request.ssh_host,
+        ssh_port=request.ssh_port,
+        ssh_user=request.ssh_user,
+        ssh_key_path=request.ssh_key_path
     )
 
     return {
@@ -93,7 +100,14 @@ async def add_server(request: AddServerRequest, user: User = Depends(get_current
         "http_use_ssl": server.http_use_ssl,
         "http_enabled": bool(server.http_port),
         "mount_path": server.mount_path,
-        "download_dir": server.download_dir
+        "download_dir": server.download_dir,
+        "auto_download_enabled": server.auto_download_enabled,
+        "auto_download_path": server.auto_download_path,
+        "auto_delete_remote": server.auto_delete_remote,
+        "ssh_host": server.ssh_host,
+        "ssh_port": server.ssh_port,
+        "ssh_user": server.ssh_user,
+        "ssh_key_path": server.ssh_key_path
     }
 
 
@@ -120,7 +134,14 @@ async def list_servers(user: User = Depends(get_current_user)):
             "http_use_ssl": s.http_use_ssl,
             "http_enabled": bool(s.http_port),
             "mount_path": s.mount_path,
-            "download_dir": s.download_dir
+            "download_dir": s.download_dir,
+            "auto_download_enabled": s.auto_download_enabled,
+            "auto_download_path": s.auto_download_path,
+            "auto_delete_remote": s.auto_delete_remote,
+            "ssh_host": s.ssh_host,
+            "ssh_port": s.ssh_port,
+            "ssh_user": s.ssh_user,
+            "ssh_key_path": s.ssh_key_path
         }
         for s in servers
     ]
@@ -149,7 +170,14 @@ async def get_server(server_id: str, user: User = Depends(get_current_user)):
         "http_use_ssl": server.http_use_ssl,
         "http_enabled": bool(server.http_port),
         "mount_path": server.mount_path,
-        "download_dir": server.download_dir
+        "download_dir": server.download_dir,
+        "auto_download_enabled": server.auto_download_enabled,
+        "auto_download_path": server.auto_download_path,
+        "auto_delete_remote": server.auto_delete_remote,
+        "ssh_host": server.ssh_host,
+        "ssh_port": server.ssh_port,
+        "ssh_user": server.ssh_user,
+        "ssh_key_path": server.ssh_key_path
     }
 
 
@@ -194,6 +222,20 @@ async def update_server(
         server.mount_path = request.mount_path
     if request.download_dir is not None:
         server.download_dir = request.download_dir
+    if request.auto_download_enabled is not None:
+        server.auto_download_enabled = request.auto_download_enabled
+    if request.auto_download_path is not None:
+        server.auto_download_path = request.auto_download_path
+    if request.auto_delete_remote is not None:
+        server.auto_delete_remote = request.auto_delete_remote
+    if request.ssh_host is not None:
+        server.ssh_host = request.ssh_host
+    if request.ssh_port is not None:
+        server.ssh_port = request.ssh_port
+    if request.ssh_user is not None:
+        server.ssh_user = request.ssh_user
+    if request.ssh_key_path is not None:
+        server.ssh_key_path = request.ssh_key_path
     if request.is_default is not None:
         if request.is_default:
             # Clear other defaults when setting this one as default
@@ -223,7 +265,14 @@ async def update_server(
         "http_enabled": bool(server.http_port),
         "is_default": server.is_default,
         "mount_path": server.mount_path,
-        "download_dir": server.download_dir
+        "download_dir": server.download_dir,
+        "auto_download_enabled": server.auto_download_enabled,
+        "auto_download_path": server.auto_download_path,
+        "auto_delete_remote": server.auto_delete_remote,
+        "ssh_host": server.ssh_host,
+        "ssh_port": server.ssh_port,
+        "ssh_user": server.ssh_user,
+        "ssh_key_path": server.ssh_key_path
     }
 
 

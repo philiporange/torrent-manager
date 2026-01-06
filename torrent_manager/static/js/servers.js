@@ -25,52 +25,70 @@ function renderServersList(container) {
     }
 
     container.innerHTML = servers.map(s => `
-        <div class="bg-white rounded-xl border border-slate-200 p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:shadow-md transition-shadow duration-200">
-            <div class="flex items-start gap-4">
-                <div class="p-3 rounded-lg bg-indigo-50 text-indigo-600">
-                    <i class="fas fa-server text-xl"></i>
-                </div>
-                <div>
-                    <h3 class="text-lg font-semibold text-slate-900 flex items-center gap-2">
-                        ${s.name}
-                        ${s.is_default ? `<span class="text-xs font-medium px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800">
-                            <i class="fas fa-star mr-1"></i>Default
-                        </span>` : ''}
-                        <span class="text-xs font-medium px-2.5 py-0.5 rounded-full ${s.server_type === 'rtorrent' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}">
-                            ${s.server_type}
-                        </span>
-                        ${s.http_enabled ? `<span class="text-xs font-medium px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                            <i class="fas fa-download mr-1"></i>HTTP
-                        </span>` : ''}
-                        ${s.mount_path ? `<span class="text-xs font-medium px-2.5 py-0.5 rounded-full bg-violet-100 text-violet-800">
-                            <i class="fas fa-folder-tree mr-1"></i>Local
-                        </span>` : ''}
-                    </h3>
-                    <div class="text-sm text-slate-500 mt-1 font-mono">
-                        ${s.host}:${s.port}
+        <div class="bg-white rounded-xl border border-slate-200 overflow-hidden hover:shadow-md transition-shadow duration-200">
+            <div class="p-5">
+                <div class="flex items-start gap-4">
+                    <div class="p-3 rounded-lg bg-indigo-50 text-indigo-600 flex-shrink-0">
+                        <i class="fas fa-server text-xl"></i>
                     </div>
-                    ${s.rpc_path ? `<div class="text-xs text-slate-400 mt-1">RPC: ${s.rpc_path}</div>` : ''}
-                    ${s.http_enabled ? `<div class="text-xs text-slate-400 mt-1">HTTP: ${s.http_host || s.host}:${s.http_port}${s.http_path || '/'}</div>` : ''}
-                    ${s.mount_path ? `<div class="text-xs text-slate-400 mt-1">Mount: ${s.mount_path}</div>` : ''}
-                    ${s.download_dir ? `<div class="text-xs text-slate-400 mt-1">Download Dir: ${s.download_dir}</div>` : ''}
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <h3 class="text-lg font-semibold text-slate-900">${s.name}</h3>
+                            ${s.is_default ? `<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                                <i class="fas fa-star mr-1"></i>Default
+                            </span>` : ''}
+                            <span class="text-xs font-medium px-2 py-0.5 rounded-full ${s.server_type === 'rtorrent' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'}">
+                                ${s.server_type}
+                            </span>
+                        </div>
+                        <div class="text-sm text-slate-500 mt-1 font-mono">${s.host}:${s.port}</div>
+
+                        <!-- Feature badges -->
+                        <div class="flex flex-wrap gap-1.5 mt-2">
+                            ${s.auto_download_enabled ? `<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
+                                <i class="fas fa-cloud-download-alt mr-1"></i>Auto-DL
+                            </span>` : ''}
+                            ${s.auto_delete_remote ? `<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-rose-100 text-rose-800">
+                                <i class="fas fa-trash-alt mr-1"></i>Del after seed
+                            </span>` : ''}
+                            ${s.http_enabled ? `<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                                <i class="fas fa-download mr-1"></i>HTTP
+                            </span>` : ''}
+                            ${s.mount_path ? `<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-violet-100 text-violet-800">
+                                <i class="fas fa-folder-tree mr-1"></i>Mount
+                            </span>` : ''}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Details -->
+                <div class="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-500">
+                    ${s.rpc_path ? `<div><span class="text-slate-400">RPC:</span> ${s.rpc_path}</div>` : ''}
+                    ${s.http_enabled ? `<div><span class="text-slate-400">HTTP:</span> ${s.http_host || s.host}:${s.http_port}${s.http_path || '/'}</div>` : ''}
+                    ${s.mount_path ? `<div><span class="text-slate-400">Mount:</span> ${s.mount_path}</div>` : ''}
+                    ${s.download_dir ? `<div><span class="text-slate-400">Remote Dir:</span> ${s.download_dir}</div>` : ''}
+                    ${s.auto_download_path ? `<div><span class="text-slate-400">Local Path:</span> ${s.auto_download_path}</div>` : ''}
+                    ${s.ssh_host || s.ssh_user ? `<div><span class="text-slate-400">SSH:</span> ${s.ssh_user || 'root'}@${s.ssh_host || s.host}:${s.ssh_port || 22}</div>` : ''}
                 </div>
             </div>
 
-            <div class="flex items-center gap-2">
-                ${!s.is_default ? `<button onclick="setDefaultServer('${s.id}')" class="px-4 py-2 text-sm font-medium text-amber-600 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors">
-                    <i class="fas fa-star mr-2"></i> Set Default
+            <!-- Actions -->
+            <div class="px-5 py-3 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center gap-2">
+                ${!s.is_default ? `<button onclick="setDefaultServer('${s.id}')" class="px-3 py-1.5 text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors">
+                    <i class="fas fa-star mr-1.5"></i>Set Default
                 </button>` : ''}
-                ${(s.http_enabled || s.mount_path) ? `<button onclick="browseFiles('${s.id}')" class="px-4 py-2 text-sm font-medium text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors">
-                    <i class="fas fa-folder-open mr-2"></i> Files
+                ${(s.http_enabled || s.mount_path) ? `<button onclick="browseFiles('${s.id}')" class="px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors">
+                    <i class="fas fa-folder-open mr-1.5"></i>Files
                 </button>` : ''}
-                <button onclick="testServer('${s.id}')" class="px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors">
-                    <i class="fas fa-plug mr-2"></i> Test
+                <button onclick="testServer('${s.id}')" class="px-3 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors">
+                    <i class="fas fa-plug mr-1.5"></i>Test
                 </button>
-                <button onclick="editServer('${s.id}')" class="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors">
-                    <i class="fas fa-edit mr-2"></i> Edit
+                <div class="flex-1"></div>
+                <button onclick="editServer('${s.id}')" class="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded-lg transition-colors">
+                    <i class="fas fa-edit mr-1.5"></i>Edit
                 </button>
-                <button onclick="deleteServer('${s.id}')" class="px-4 py-2 text-sm font-medium text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors">
-                    <i class="fas fa-trash mr-2"></i> Delete
+                <button onclick="deleteServer('${s.id}')" class="px-3 py-1.5 text-xs font-medium text-rose-700 bg-white border border-rose-200 hover:bg-rose-50 rounded-lg transition-colors">
+                    <i class="fas fa-trash mr-1.5"></i>Delete
                 </button>
             </div>
         </div>
@@ -101,7 +119,16 @@ async function handleAddServer(event) {
         // Local mount configuration
         mount_path: form.mount_path.value || null,
         // Download directory for path mapping
-        download_dir: form.download_dir.value || null
+        download_dir: form.download_dir.value || null,
+        // Auto-download configuration
+        auto_download_enabled: form.auto_download_enabled.checked,
+        auto_download_path: form.auto_download_path.value || null,
+        auto_delete_remote: form.auto_delete_remote.checked,
+        // SSH configuration
+        ssh_host: form.ssh_host.value || null,
+        ssh_port: form.ssh_port.value ? parseInt(form.ssh_port.value) : 22,
+        ssh_user: form.ssh_user.value || null,
+        ssh_key_path: form.ssh_key_path.value || null
     };
 
     try {
@@ -148,6 +175,26 @@ function editServer(id) {
     form.mount_path.value = s.mount_path || '';
     // Download directory field
     form.download_dir.value = s.download_dir || '';
+    // Auto-download fields
+    form.auto_download_enabled.checked = s.auto_download_enabled || false;
+    form.auto_download_path.value = s.auto_download_path || '';
+    form.auto_delete_remote.checked = s.auto_delete_remote || false;
+    // SSH fields
+    form.ssh_host.value = s.ssh_host || '';
+    form.ssh_port.value = s.ssh_port || 22;
+    form.ssh_user.value = s.ssh_user || '';
+    form.ssh_key_path.value = s.ssh_key_path || '';
+
+    // Expand sections that have data
+    if (s.auto_download_enabled || s.auto_download_path || s.ssh_host || s.ssh_user) {
+        expandSection('autoDownloadSection');
+    }
+    if (s.http_port || s.http_host) {
+        expandSection('httpSection');
+    }
+    if (s.mount_path || s.download_dir) {
+        expandSection('pathsSection');
+    }
 
     document.getElementById('formContainer').scrollIntoView({ behavior: 'smooth' });
 }
@@ -157,6 +204,8 @@ function resetForm() {
     document.getElementById('editingServerId').value = '';
     document.getElementById('formTitle').textContent = 'Add New Server';
     document.getElementById('submitBtnText').textContent = 'Add Server';
+    // Reset SSH port default
+    document.querySelector('[name="ssh_port"]').value = 22;
 }
 
 async function deleteServer(id) {
@@ -183,16 +232,44 @@ async function setDefaultServer(id) {
 async function testServer(id) {
     const btn = event.currentTarget;
     const icon = btn.querySelector('i');
-    icon.className = 'fas fa-circle-notch fa-spin mr-2';
-    
+    icon.className = 'fas fa-circle-notch fa-spin mr-1.5';
+
     try {
         const res = await apiRequest(`/servers/${id}/test`, { method: 'POST' });
         showToast(res.message, res.status === 'connected' ? 'success' : 'danger');
     } catch (e) {
         // handled
     } finally {
-        icon.className = 'fas fa-plug mr-2';
+        icon.className = 'fas fa-plug mr-1.5';
     }
+}
+
+// Section toggle functionality
+function toggleSection(sectionId) {
+    const section = document.getElementById(sectionId);
+    const icon = document.getElementById(sectionId + '-icon');
+
+    if (section.classList.contains('collapsed')) {
+        section.classList.remove('collapsed');
+        icon.style.transform = 'rotate(0deg)';
+    } else {
+        section.classList.add('collapsed');
+        icon.style.transform = 'rotate(-90deg)';
+    }
+}
+
+function expandSection(sectionId) {
+    const section = document.getElementById(sectionId);
+    const icon = document.getElementById(sectionId + '-icon');
+    section.classList.remove('collapsed');
+    if (icon) icon.style.transform = 'rotate(0deg)';
+}
+
+function collapseSection(sectionId) {
+    const section = document.getElementById(sectionId);
+    const icon = document.getElementById(sectionId + '-icon');
+    section.classList.add('collapsed');
+    if (icon) icon.style.transform = 'rotate(-90deg)';
 }
 
 // File browser state
@@ -294,4 +371,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (user) loadServers();
 
     document.getElementById('serverForm').addEventListener('submit', handleAddServer);
+
+    // Collapse optional sections by default
+    collapseSection('autoDownloadSection');
+    collapseSection('httpSection');
+    collapseSection('pathsSection');
 });
