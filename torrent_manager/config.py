@@ -58,6 +58,13 @@ MAGNET_RESOLVER_PROXY_HOST = None
 MAGNET_RESOLVER_PROXY_PORT = None
 MAGNET_RESOLVER_HTTP_PROXY = None
 
+# Transfer service settings (auto-download completed torrents via rsync)
+TRANSFER_MAX_CONCURRENT = 2   # Maximum concurrent transfers
+TRANSFER_MAX_RETRIES = 3      # Max retries on failure
+
+# Callback settings (lifecycle hooks for torrents)
+CALLBACK_DIR = os.path.expanduser("~/.torrent_manager/callbacks")
+
 
 class Config:
     DEBUG = os.getenv("DEBUG", DEBUG)
@@ -122,6 +129,13 @@ class Config:
     MAGNET_RESOLVER_PROXY_HOST = os.getenv("MAGNET_RESOLVER_PROXY_HOST", MAGNET_RESOLVER_PROXY_HOST)
     MAGNET_RESOLVER_PROXY_PORT = int(os.getenv("MAGNET_RESOLVER_PROXY_PORT", "0")) or MAGNET_RESOLVER_PROXY_PORT
     MAGNET_RESOLVER_HTTP_PROXY = os.getenv("MAGNET_RESOLVER_HTTP_PROXY", MAGNET_RESOLVER_HTTP_PROXY)
+
+    # Transfer service settings
+    TRANSFER_MAX_CONCURRENT = int(os.getenv("TRANSFER_MAX_CONCURRENT", str(TRANSFER_MAX_CONCURRENT)))
+    TRANSFER_MAX_RETRIES = int(os.getenv("TRANSFER_MAX_RETRIES", str(TRANSFER_MAX_RETRIES)))
+
+    # Callback settings
+    CALLBACK_DIR = os.getenv("CALLBACK_DIR", CALLBACK_DIR)
 
     @property
     def API_BASE_URL(self):

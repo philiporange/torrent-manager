@@ -49,6 +49,15 @@ class AddServerRequest(BaseModel):
     mount_path: Optional[str] = None
     # Download directory on the server (for computing relative paths)
     download_dir: Optional[str] = None
+    # Auto-download configuration (rsync over SSH)
+    auto_download_enabled: bool = False
+    auto_download_path: Optional[str] = None
+    auto_delete_remote: bool = False
+    # SSH configuration for rsync transfers
+    ssh_host: Optional[str] = None
+    ssh_port: int = 22
+    ssh_user: Optional[str] = None
+    ssh_key_path: Optional[str] = None
 
 
 class UpdateServerRequest(BaseModel):
@@ -72,6 +81,15 @@ class UpdateServerRequest(BaseModel):
     mount_path: Optional[str] = None
     # Download directory on the server (for computing relative paths)
     download_dir: Optional[str] = None
+    # Auto-download configuration (rsync over SSH)
+    auto_download_enabled: Optional[bool] = None
+    auto_download_path: Optional[str] = None
+    auto_delete_remote: Optional[bool] = None
+    # SSH configuration for rsync transfers
+    ssh_host: Optional[str] = None
+    ssh_port: Optional[int] = None
+    ssh_user: Optional[str] = None
+    ssh_key_path: Optional[str] = None
 
 
 class CreateUserRequest(BaseModel):
@@ -91,3 +109,17 @@ class SetLabelsRequest(BaseModel):
 
 class AddLabelRequest(BaseModel):
     label: str
+
+
+class StartTransferRequest(BaseModel):
+    """Request to manually start a file transfer for a completed torrent."""
+    torrent_hash: str
+    server_id: str
+    download_path: Optional[str] = None  # Override destination path
+
+
+class UpdateTorrentSettingsRequest(BaseModel):
+    """Request to update per-torrent download settings."""
+    download_path: Optional[str] = None
+    auto_download: Optional[bool] = None
+    auto_delete_remote: Optional[bool] = None

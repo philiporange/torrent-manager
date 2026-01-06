@@ -2,11 +2,15 @@
 FastAPI application for Torrent Manager.
 
 Integrates multiple background services:
-- Seeding monitor for auto-pause of completed torrents
+- Seeding monitor for auto-pause of completed torrents (with error tracking to reduce log noise)
 - Torrent poller for tracking torrent status
+- Transfer service for auto-download of completed torrents
 - Media streaming worker for HLS transcoding via media_server
 
 The HLS output directory is mounted at /media for serving transcoded streams.
+
+Error handling includes reduced-frequency logging for persistent server connection
+failures to prevent log spam when servers are unreachable.
 """
 import asyncio
 import datetime
@@ -21,6 +25,7 @@ from torrent_manager.logger import logger
 from torrent_manager.auth import SessionManager, ApiKeyManager
 from torrent_manager.trackers import fetch_trackers
 from torrent_manager.polling import get_poller
+from torrent_manager.transfer import get_transfer_service
 
 # Media streaming support
 from media_server.config import cfg as media_cfg
@@ -35,6 +40,10 @@ async def seeding_monitor_task():
     from torrent_manager.models import TorrentServer
     from torrent_manager.client_factory import get_client
     from torrent_manager.activity import Activity
+    import time
+
+    # Track errors per server to reduce log noise for persistent failures
+    server_errors = {}
 
     while True:
         try:
@@ -74,8 +83,40 @@ async def seeding_monitor_task():
                                         f"torrent: {name} (seeded {hours:.1f}h)"
                                     )
                                     client.stop(info_hash)
+
+                        # Clear error tracking on successful server processing
+                        if server.id in server_errors:
+                            del server_errors[server.id]
+
                     except Exception as e:
-                        logger.error(f"Error monitoring server {server.name}: {e}")
+                        current_time = time.time()
+
+                        if server.id not in server_errors:
+                            server_errors[server.id] = {
+                                'count': 0,
+                                'last_logged': 0.0
+                            }
+
+                        server_errors[server.id]['count'] += 1
+                        error_count = server_errors[server.id]['count']
+                        last_logged = server_errors[server.id]['last_logged']
+
+                        # Log errors with reduced frequency for persistent failures
+                        should_log = (
+                            error_count == 1 or
+                            error_count == 5 or
+                            (current_time - last_logged) >= 600
+                        )
+
+                        if should_log:
+                            if error_count == 1:
+                                logger.error(f"Error monitoring server {server.name}: {e}")
+                            else:
+                                logger.error(
+                                    f"Error monitoring server {server.name} "
+                                    f"({error_count} consecutive failures): {e}"
+                                )
+                            server_errors[server.id]['last_logged'] = current_time
 
                 activity.close()
         except Exception as e:
@@ -120,12 +161,22 @@ async def lifespan(app: FastAPI):
     poller = get_poller()
     poller_task = asyncio.create_task(poller.run())
 
+    # Start background transfer service
+    transfer_service = get_transfer_service()
+    transfer_task = asyncio.create_task(transfer_service.run())
+
     yield
 
     # Shutdown
+    transfer_service.stop()
+    transfer_task.cancel()
     poller.stop()
     poller_task.cancel()
     monitor_task.cancel()
+    try:
+        await transfer_task
+    except asyncio.CancelledError:
+        pass
     try:
         await poller_task
     except asyncio.CancelledError:

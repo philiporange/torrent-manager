@@ -39,6 +39,12 @@ A Python application for managing torrent client instances with a secure REST AP
 - CSRF protection via SameSite=Lax cookies
 - Secure cookie attributes (HttpOnly, Secure, SameSite)
 
+### Lifecycle Callbacks
+- Hook into torrent lifecycle events with custom Python scripts
+- Events: added, started, stopped, completed, removed, error, transfer_started, transfer_completed
+- Callbacks receive comprehensive torrent data including all database records
+- Auto-loaded from `~/.torrent_manager/callbacks/` directory
+
 ## Quick Start
 
 ### Start the API Server
@@ -292,3 +298,94 @@ All 47 tests should pass, covering:
 - API key creation, validation, and revocation
 - Both session and API key authentication
 - Protected endpoint access
+
+## Lifecycle Callbacks
+
+The callback system allows you to run custom Python scripts when torrent lifecycle events occur. Callbacks are automatically loaded from `~/.torrent_manager/callbacks/` on server startup.
+
+### Supported Events
+
+| Event | Trigger |
+|-------|---------|
+| `on_added` | Torrent added to a server |
+| `on_started` | Torrent started/resumed |
+| `on_stopped` | Torrent paused/stopped |
+| `on_completed` | Torrent finished downloading (100%) |
+| `on_removed` | Torrent removed from server |
+| `on_error` | Error occurred with torrent |
+| `on_transfer_started` | File transfer to local storage began |
+| `on_transfer_completed` | File transfer to local storage finished |
+
+### Creating a Callback
+
+Create a Python file in `~/.torrent_manager/callbacks/` that defines a class inheriting from `TorrentCallback`:
+
+```python
+# ~/.torrent_manager/callbacks/my_callback.py
+from torrent_manager.callbacks import TorrentCallback, TorrentInfo
+
+class MyCallback(TorrentCallback):
+    async def on_completed(self, torrent_info: TorrentInfo) -> None:
+        print(f"Completed: {torrent_info.name}")
+        print(f"Size: {torrent_info.size / 1024 / 1024:.1f} MB")
+        print(f"Server: {torrent_info.server_name}")
+
+        # Access database records
+        if torrent_info.db_server:
+            print(f"Auto-download: {torrent_info.db_server.get('auto_download_enabled')}")
+```
+
+### TorrentInfo Fields
+
+Callbacks receive a `TorrentInfo` object with:
+
+**Core fields:**
+- `info_hash`, `name`, `server_id`, `server_name`, `server_type`
+- `size`, `progress`, `state`, `is_active`, `is_complete`, `is_private`
+- `download_rate`, `upload_rate`, `seeders`, `leechers`, `ratio`
+- `base_path`, `labels`
+
+**Database records:**
+- `db_torrent` - Torrent table record
+- `db_statuses` - Recent Status records (last 10)
+- `db_actions` - Recent Action records (last 20)
+- `db_server` - TorrentServer configuration
+- `db_transfers` - TransferJob records
+- `db_settings` - Per-torrent user settings
+
+**Event metadata:**
+- `event` - The event type (TorrentEvent enum)
+- `event_time` - When the event occurred
+- `error_message` - Error details (for error events)
+
+### Example: Notification Callback
+
+```python
+# ~/.torrent_manager/callbacks/notify.py
+import httpx
+from torrent_manager.callbacks import TorrentCallback, TorrentInfo
+
+class WebhookCallback(TorrentCallback):
+    WEBHOOK_URL = "https://hooks.example.com/torrent"
+
+    async def on_completed(self, torrent_info: TorrentInfo) -> None:
+        async with httpx.AsyncClient() as client:
+            await client.post(self.WEBHOOK_URL, json={
+                "event": "completed",
+                "name": torrent_info.name,
+                "size": torrent_info.size,
+                "hash": torrent_info.info_hash,
+            })
+```
+
+### Configuration
+
+The callback directory can be customized via environment variable:
+
+```bash
+export CALLBACK_DIR="/path/to/custom/callbacks"
+```
+
+Default: `~/.torrent_manager/callbacks/`
+
+See `examples/example_callback.py` for more callback examples.

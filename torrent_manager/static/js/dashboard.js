@@ -18,6 +18,13 @@ let contextMenuTorrent = null;  // Currently selected torrent for context menu
 let longPressTimer = null;
 const LONG_PRESS_DURATION = 500;  // ms
 
+// Adaptive polling: faster during active transfers or downloads
+let hasActiveTransfers = false;
+let hasActiveDownloads = false;
+let pollTimeoutId = null;
+const POLL_INTERVAL_FAST = 3000;   // 3s during active transfers/downloads
+const POLL_INTERVAL_NORMAL = 15000; // 15s when idle
+
 // Intersection Observer for lazy rendering
 let rowObserver = null;
 function initRowObserver() {
@@ -73,12 +80,22 @@ async function loadTorrents() {
         console.log('[LOAD] Got', torrents.length, 'torrents from API:', torrents.map(t => t.info_hash));
         loadingEl.classList.add('hidden');
 
-        // Update stats
+        // Update stats and detect active transfers/downloads
         let stats = { down: 0, up: 0, active: 0 };
+        hasActiveTransfers = false;
+        hasActiveDownloads = false;
         torrents.forEach(t => {
             stats.down += t.download_rate || 0;
             stats.up += t.upload_rate || 0;
             if (t.is_active) stats.active++;
+            // Check for active transfers
+            if (t.transfer && t.transfer.status === 'transferring') {
+                hasActiveTransfers = true;
+            }
+            // Check for active downloads (not complete and downloading)
+            if (!t.complete && t.is_active && (t.download_rate || 0) > 0) {
+                hasActiveDownloads = true;
+            }
         });
         updateGlobalStats(stats, torrents.length);
 
@@ -192,11 +209,18 @@ function updateTorrentTable(torrents, tbody) {
 
 function hasChanged(oldData, newData) {
     if (!oldData) return true;
+    // Check transfer status/progress changes
+    const oldTransfer = oldData.transfer || {};
+    const newTransfer = newData.transfer || {};
+    const transferChanged = oldTransfer.status !== newTransfer.status ||
+                           oldTransfer.progress !== newTransfer.progress;
+
     return oldData.progress !== newData.progress ||
            oldData.download_rate !== newData.download_rate ||
            oldData.upload_rate !== newData.upload_rate ||
            oldData.state !== newData.state ||
-           oldData.is_active !== newData.is_active;
+           oldData.is_active !== newData.is_active ||
+           transferChanged;
 }
 
 function createPlaceholderRow(t) {
@@ -237,6 +261,7 @@ function getStatusStyle(status) {
         case 'download': return 'text-indigo-600 bg-indigo-50';
         case 'seeding': return 'text-amber-600 bg-amber-50';
         case 'finished': return 'text-emerald-600 bg-emerald-50';
+        case 'transferring': return 'text-blue-600 bg-blue-50';
         default: return 'text-slate-600 bg-slate-50';
     }
 }
@@ -266,12 +291,20 @@ function formatSpeedMB(bytesPerSec) {
 
 function updateRow(row, t) {
     const pct = Math.min(100, (t.progress || 0) * 100);
-    const status = getDisplayStatus(t);
-    const statusStyle = getStatusStyle(status);
     const isComplete = t.complete || t.state === 'finished' || t.progress >= 1;
+    const isTransferring = t.transfer && t.transfer.status === 'transferring';
+    const transferPct = isTransferring ? (t.transfer.progress || 0) : 0;
+
+    // Use transfer status if transferring, otherwise normal status
+    const status = isTransferring ? 'transferring' : getDisplayStatus(t);
+    const statusStyle = getStatusStyle(status);
 
     // Row background as progress bar
-    if (!isComplete && pct > 0) {
+    if (isTransferring && transferPct > 0) {
+        // Blue gradient for transfer progress
+        row.style.background = `linear-gradient(to right, rgba(147, 197, 253, 0.5) ${transferPct}%, transparent ${transferPct}%)`;
+    } else if (!isComplete && pct > 0) {
+        // Green gradient for download progress
         row.style.background = `linear-gradient(to right, rgba(187, 247, 208, 0.5) ${pct}%, transparent ${pct}%)`;
     } else {
         row.style.background = '';
@@ -293,6 +326,9 @@ function updateRow(row, t) {
     // Seed remaining
     const seedRemaining = isComplete ? formatSeedRemaining(t) : '<span class="text-slate-300">-</span>';
 
+    // Status display
+    const statusDisplay = status;
+
     row.innerHTML = `
         <td class="px-4 py-3">
             <div class="flex items-center gap-2 min-w-0">
@@ -303,7 +339,7 @@ function updateRow(row, t) {
             </div>
         </td>
         <td class="px-4 py-3">
-            <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${statusStyle}">${status}</span>
+            <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-full ${statusStyle}">${statusDisplay}</span>
         </td>
         <td class="px-4 py-3 text-sm text-slate-600 hidden sm:table-cell">
             ${formatSizeGB(t.size || 0)}
@@ -456,6 +492,8 @@ async function openManagementModal(hash, serverId) {
     // Update button visibility
     document.getElementById('mgmtStartBtn').classList.toggle('hidden', t.is_active);
     document.getElementById('mgmtStopBtn').classList.toggle('hidden', !t.is_active);
+    // Show download button only for complete torrents
+    document.getElementById('mgmtDownloadBtn').classList.toggle('hidden', !t.complete);
 
     // Load labels
     loadManagementLabels(hash, serverId);
@@ -1227,6 +1265,31 @@ function mgmtDelete() {
     document.getElementById('deleteConfirmModal').classList.remove('hidden');
 }
 
+async function mgmtDownloadLocal() {
+    if (!currentTorrent) return;
+    const btn = document.getElementById('mgmtDownloadBtn');
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<i class="fas fa-circle-notch fa-spin mr-1"></i>Queuing...';
+    btn.disabled = true;
+
+    try {
+        await apiRequest('/transfers', {
+            method: 'POST',
+            body: JSON.stringify({
+                server_id: currentTorrent.serverId,
+                torrent_hash: currentTorrent.hash
+            })
+        });
+        showToast('Transfer queued', 'success');
+        closeManagementModal();
+    } catch (error) {
+        showToast('Failed to queue transfer', 'danger');
+    } finally {
+        btn.innerHTML = originalHtml;
+        btn.disabled = false;
+    }
+}
+
 function closeDeleteConfirm() {
     document.getElementById('deleteConfirmModal').classList.add('hidden');
 }
@@ -1407,11 +1470,24 @@ document.addEventListener('DOMContentLoaded', async () => {
             servers = await apiRequest('/servers');
         } catch (e) {}
         loadTorrents();
-        setInterval(() => {
-            if (pollingEnabled && !document.hidden) loadTorrents();
-        }, 15000);
+        // Start adaptive polling
+        schedulePoll();
     }
+});
 
+// Adaptive polling: poll faster during active transfers or downloads
+function schedulePoll() {
+    if (pollTimeoutId) clearTimeout(pollTimeoutId);
+    const interval = (hasActiveTransfers || hasActiveDownloads) ? POLL_INTERVAL_FAST : POLL_INTERVAL_NORMAL;
+    pollTimeoutId = setTimeout(async () => {
+        if (pollingEnabled && !document.hidden) {
+            await loadTorrents();
+        }
+        schedulePoll();
+    }, interval);
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
     // Label input enter key
     document.getElementById('newLabelInput').addEventListener('keypress', e => {
         if (e.key === 'Enter') {

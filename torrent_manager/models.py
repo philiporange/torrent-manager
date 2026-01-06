@@ -2,8 +2,9 @@
 Database models for the torrent manager application.
 
 Includes models for user authentication (User, Session, RememberMeToken, ApiKey),
-torrent server configuration (TorrentServer with HTTP download and local mount support),
-and torrent tracking (Torrent, Status, Action).
+torrent server configuration (TorrentServer with HTTP download, local mount, and
+auto-download via rsync over SSH), torrent tracking (Torrent, Status, Action),
+and file transfer management (TransferJob, UserTorrentSettings).
 """
 
 import datetime
@@ -36,6 +37,9 @@ class TorrentServer(BaseModel):
     mount_path optionally specifies a local sshfs-mounted directory path that
     maps to the server's download directory. When set, file serving will prefer
     the local mount for faster access before falling back to HTTP proxy.
+
+    Auto-download fields configure automatic transfer of completed torrents
+    to local storage via rsync over SSH.
     """
     id = CharField(primary_key=True)
     user_id = CharField(index=True)
@@ -62,6 +66,15 @@ class TorrentServer(BaseModel):
     # Download directory on the server (e.g., "/home/user/downloads/")
     # Used to compute relative paths for HTTP downloads
     download_dir = CharField(null=True)
+    # Auto-download configuration (rsync over SSH)
+    auto_download_enabled = BooleanField(default=False)
+    auto_download_path = CharField(null=True)  # Local destination path
+    auto_delete_remote = BooleanField(default=False)  # Delete remote after transfer
+    # SSH configuration for rsync transfers
+    ssh_host = CharField(null=True)  # SSH host (defaults to main host if not set)
+    ssh_port = IntegerField(default=22)
+    ssh_user = CharField(null=True)  # SSH username
+    ssh_key_path = CharField(null=True)  # Path to SSH private key
 
 class Session(BaseModel):
     """
@@ -140,5 +153,67 @@ class Action(BaseModel):
     timestamp = DateTimeField(default=datetime.datetime.now)
 
 
+class TransferJob(BaseModel):
+    """
+    Tracks file transfer jobs from remote torrent servers to local storage.
+
+    Uses rsync over SSH for robust, resumable transfers. Jobs are queued when
+    torrents complete and processed by the TransferService background task.
+
+    States:
+    - pending: Queued, waiting to start
+    - running: rsync in progress
+    - completed: Transfer finished successfully
+    - failed: Transfer failed after max retries (see error field)
+    - cancelled: User cancelled the transfer
+    """
+    id = CharField(primary_key=True)
+    user_id = CharField(index=True)
+    server_id = CharField(index=True)
+    torrent_hash = CharField(index=True)
+    torrent_name = CharField()
+    # Source and destination paths
+    remote_path = CharField()
+    local_path = CharField()
+    # Status tracking
+    status = CharField(default="pending")  # pending, running, completed, failed, cancelled
+    progress_bytes = IntegerField(default=0)
+    total_bytes = IntegerField(default=0)
+    progress_percent = FloatField(default=0.0)
+    # Timing
+    created_at = DateTimeField(default=datetime.datetime.now)
+    started_at = DateTimeField(null=True)
+    completed_at = DateTimeField(null=True)
+    # Error handling
+    error = CharField(null=True)
+    retry_count = IntegerField(default=0)
+    max_retries = IntegerField(default=3)
+    # Flags
+    auto_delete_after = BooleanField(default=False)
+    remote_deleted = BooleanField(default=False)  # True after remote deletion completes
+    triggered_by = CharField(default="auto")  # "auto" or "manual"
+
+
+class UserTorrentSettings(BaseModel):
+    """
+    Per-torrent settings for overriding server defaults.
+
+    Created when user configures custom download location or auto-download
+    behavior for a specific torrent. Null values mean inherit from server.
+    """
+    user_id = CharField(index=True)
+    server_id = CharField(index=True)
+    torrent_hash = CharField(index=True)
+    # Override settings (null = use server default)
+    download_path = CharField(null=True)
+    auto_download = BooleanField(null=True)
+    auto_delete_remote = BooleanField(null=True)
+
+    class Meta:
+        indexes = (
+            (('user_id', 'server_id', 'torrent_hash'), True),
+        )
+
+
 db.connect()
-db.create_tables([User, Session, RememberMeToken, ApiKey, TorrentServer, UserTorrent, Torrent, Status, Action])
+db.create_tables([User, Session, RememberMeToken, ApiKey, TorrentServer, UserTorrent, Torrent, Status, Action, TransferJob, UserTorrentSettings])
