@@ -8,9 +8,10 @@ Rate limiting is applied between item processing to reduce tracker pressure, and
 HTTP 429 errors trigger exponential retry backoff so private trackers are not
 hammered after they begin rate limiting requests.
 
-Database connection management ensures the SQLite connection is open before each
-operation, preventing "Cannot operate on a closed database" errors when the
-connection is closed by other async tasks or threads.
+Database connection management ensures the SQLite connection is open before
+database operations. Query results are eagerly evaluated with list() to prevent
+lazy iteration errors when the connection is closed by other async tasks between
+the query and iteration.
 """
 
 import asyncio
@@ -218,7 +219,7 @@ class RSSService:
     async def refresh_enabled_feeds(self) -> None:
         """Refresh all enabled feeds sequentially."""
         self._ensure_db_connected()
-        feeds = RSSFeed.select().where(RSSFeed.enabled == True)
+        feeds = list(RSSFeed.select().where(RSSFeed.enabled == True))
         for feed in feeds:
             await self.refresh_feed(feed)
 
@@ -226,15 +227,16 @@ class RSSService:
         """Add any detected items whose delay window has elapsed."""
         self._ensure_db_connected()
         now = datetime.datetime.now()
-        pending_items = RSSFeedItem.select().where(
+        pending_items = list(RSSFeedItem.select().where(
             (RSSFeedItem.status == "pending")
             & (RSSFeedItem.next_attempt_at <= now)
-        ).order_by(RSSFeedItem.next_attempt_at.asc()).limit(Config.RSS_MAX_ITEMS_PER_CYCLE)
+        ).order_by(RSSFeedItem.next_attempt_at.asc()).limit(Config.RSS_MAX_ITEMS_PER_CYCLE))
 
         for idx, item in enumerate(pending_items):
             if idx > 0 and Config.RSS_RATE_LIMIT_DELAY > 0:
                 await asyncio.sleep(Config.RSS_RATE_LIMIT_DELAY)
 
+            self._ensure_db_connected()
             try:
                 server = TorrentServer.get(TorrentServer.id == item.server_id)
             except TorrentServer.DoesNotExist:
