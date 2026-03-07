@@ -28,12 +28,13 @@ from torrent_manager.auth import SessionManager, ApiKeyManager
 from torrent_manager.trackers import fetch_trackers
 from torrent_manager.polling import get_poller
 from torrent_manager.transfer import get_transfer_service
+from torrent_manager.rss import get_rss_service
 
 # Media streaming support
 from media_server.config import cfg as media_cfg
 from media_server import worker as media_worker
 
-from .routes import auth, servers, torrents, admin, pages
+from .routes import auth, servers, torrents, admin, pages, rss
 from .routes.auth import set_session_cookie
 
 
@@ -108,7 +109,6 @@ async def seeding_monitor_task():
                                 except Exception as e:
                                     logger.error(f"Failed to auto-pause torrent {info_hash} on {server.name}: {e}")
 
-                activity.close()
         except Exception as e:
             logger.error(f"Error in seeding monitor: {e}")
 
@@ -155,14 +155,24 @@ async def lifespan(app: FastAPI):
     transfer_service = get_transfer_service()
     transfer_task = asyncio.create_task(transfer_service.run())
 
+    # Start background RSS service
+    rss_service = get_rss_service()
+    rss_task = asyncio.create_task(rss_service.run())
+
     yield
 
     # Shutdown
+    rss_service.stop()
+    rss_task.cancel()
     transfer_service.stop()
     transfer_task.cancel()
     poller.stop()
     poller_task.cancel()
     monitor_task.cancel()
+    try:
+        await rss_task
+    except asyncio.CancelledError:
+        pass
     try:
         await transfer_task
     except asyncio.CancelledError:
@@ -242,6 +252,7 @@ app.include_router(auth.router)
 app.include_router(servers.router)
 app.include_router(torrents.router)
 app.include_router(admin.router)
+app.include_router(rss.router)
 app.include_router(pages.router)
 
 

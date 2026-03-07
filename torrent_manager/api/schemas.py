@@ -123,3 +123,20 @@ class UpdateTorrentSettingsRequest(BaseModel):
     download_path: Optional[str] = None
     auto_download: Optional[bool] = None
     auto_delete_remote: Optional[bool] = None
+
+
+
+class RSSFeedRequest(BaseModel):
+    name: str
+    url: str
+    server_id: str
+    delay_hours: int = 0
+    enabled: bool = True
+
+
+class RSSFeedUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    server_id: Optional[str] = None
+    delay_hours: Optional[int] = None
+    enabled: Optional[bool] = None

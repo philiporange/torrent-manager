@@ -26,6 +26,14 @@ async def api_keys_page():
     return FileResponse(str(STATIC_DIR / "api_keys.html"), media_type="text/html")
 
 
+
+
+@router.get("/manage-rss")
+async def rss_page():
+    """Serve the RSS management page."""
+    return FileResponse(str(STATIC_DIR / "rss.html"), media_type="text/html")
+
+
 @router.get("/")
 async def root():
     """Serve the frontend index.html."""

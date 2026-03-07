@@ -48,6 +48,7 @@ from .config import Config
 from .logger import logger
 from .torrent_file import TorrentFile
 from .magnet_link import MagnetLink
+from .utils import rate_limited_get
 
 
 TRANSMISSION_HOST = Config.TRANSMISSION_HOST
@@ -489,7 +490,7 @@ class TransmissionClient(BaseTorrentClient):
 
     def _download_torrent_file(self, url):
         """Download a .torrent file from a URL to a temporary file."""
-        response = requests.get(url)
+        response = rate_limited_get(url)
         response.raise_for_status()
 
         temp_dir = tempfile.gettempdir()
