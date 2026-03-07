@@ -1,3 +1,10 @@
+"""Configuration management with environment variable overrides.
+
+Defines default configuration values at module level and exposes a Config class
+that loads values from environment variables (from ~/.env and project .env).
+All configuration options can be overridden via environment variables.
+"""
+
 import os
 import tempfile
 import dotenv
@@ -63,6 +70,15 @@ MAGNET_RESOLVER_HTTP_PROXY = None
 # Transfer service settings (auto-download completed torrents via rsync)
 TRANSFER_MAX_CONCURRENT = 2   # Maximum concurrent transfers
 TRANSFER_MAX_RETRIES = 3      # Max retries on failure
+
+# RSS polling settings
+RSS_POLL_INTERVAL = 300       # Check RSS feeds every 5 minutes
+RSS_RETRY_DELAY = 900         # Retry failed RSS adds after 15 minutes
+
+# Remote torrent file download throttling
+TORRENT_URL_MIN_INTERVAL = 5  # Minimum seconds between HTTP .torrent fetches per host
+RSS_RATE_LIMIT_DELAY = 2.0    # Delay between processing RSS items (seconds)
+RSS_MAX_ITEMS_PER_CYCLE = 50  # Maximum RSS items to process per cycle
 
 # Client timeout settings (in seconds)
 CLIENT_TIMEOUT = 30           # Default timeout for torrent client operations
@@ -147,6 +163,15 @@ class Config:
     # Transfer service settings
     TRANSFER_MAX_CONCURRENT = int(os.getenv("TRANSFER_MAX_CONCURRENT", str(TRANSFER_MAX_CONCURRENT)))
     TRANSFER_MAX_RETRIES = int(os.getenv("TRANSFER_MAX_RETRIES", str(TRANSFER_MAX_RETRIES)))
+
+    # RSS polling settings
+    RSS_POLL_INTERVAL = int(os.getenv("RSS_POLL_INTERVAL", str(RSS_POLL_INTERVAL)))
+    RSS_RETRY_DELAY = int(os.getenv("RSS_RETRY_DELAY", str(RSS_RETRY_DELAY)))
+    RSS_RATE_LIMIT_DELAY = float(os.getenv("RSS_RATE_LIMIT_DELAY", str(RSS_RATE_LIMIT_DELAY)))
+    RSS_MAX_ITEMS_PER_CYCLE = int(os.getenv("RSS_MAX_ITEMS_PER_CYCLE", str(RSS_MAX_ITEMS_PER_CYCLE)))
+
+    # Remote torrent file download throttling
+    TORRENT_URL_MIN_INTERVAL = int(os.getenv("TORRENT_URL_MIN_INTERVAL", str(TORRENT_URL_MIN_INTERVAL)))
 
     # Client timeout settings
     CLIENT_TIMEOUT = int(os.getenv("CLIENT_TIMEOUT", str(CLIENT_TIMEOUT)))
