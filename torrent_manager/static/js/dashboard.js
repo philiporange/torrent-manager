@@ -7,6 +7,7 @@
  * Media player (Plyr) and HLS.js are lazy-loaded only when first used.
  * HLS streaming waits for playlist availability before playback.
  * Transcode progress is shown on the scrubber and seeking is limited.
+ * Batch file upload with progress tracking and per-file status feedback.
  */
 
 let pollingEnabled = true;
@@ -330,7 +331,7 @@ function updateRow(row, t) {
     const statusDisplay = status;
 
     row.innerHTML = `
-        <td class="px-4 py-3">
+        <td class="px-4 py-3 max-w-0">
             <div class="flex items-center gap-2 min-w-0">
                 <span class="truncate text-sm font-medium text-slate-900" title="${t.name || t.info_hash}">
                     ${t.name || t.info_hash.substring(0, 16) + '...'}
@@ -1354,28 +1355,163 @@ async function removeTorrent(hash, serverId) {
     console.log('[DELETE] Row still in DOM:', !!stillExists);
 }
 
-async function addTorrentFile(file) {
+async function addTorrentFiles(files) {
     const server_id = document.getElementById('targetServer').value;
-    if (!server_id) { showToast('Please select a server', 'danger'); return; }
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    const response = await fetch(`${API_BASE}/torrents/upload?server_id=${server_id}`, {
-        method: 'POST',
-        credentials: 'include',
-        body: formData
-    });
-
-    if (!response.ok) {
-        const error = await response.json();
-        showToast(error.detail || 'Upload failed', 'danger');
+    if (!server_id) {
+        showToast('Please select a server', 'danger');
         return;
     }
 
-    showToast('Torrent uploaded');
-    closeModal('addModal');
+    const fileList = Array.from(files);
+    if (fileList.length === 0) return;
+
+    // Show progress UI
+    const dropZone = document.getElementById('dropZone');
+    const progressDiv = document.getElementById('uploadProgress');
+    const summaryDiv = document.getElementById('uploadSummary');
+    const progressBar = document.getElementById('uploadProgressBar');
+    const progressText = document.getElementById('uploadProgressText');
+    const resultsDiv = document.getElementById('uploadResults');
+
+    dropZone.classList.add('hidden');
+    summaryDiv.classList.add('hidden');
+    progressDiv.classList.remove('hidden');
+    resultsDiv.innerHTML = '';
+    progressBar.style.width = '0%';
+    progressText.textContent = `0 / ${fileList.length}`;
+
+    const results = [];
+    let successCount = 0;
+    let failureCount = 0;
+
+    // Upload files one at a time for real-time progress
+    for (let i = 0; i < fileList.length; i++) {
+        const file = fileList[i];
+        const result = {
+            filename: file.name,
+            torrent_name: null,
+            success: false,
+            message: ''
+        };
+
+        // Update progress text before upload
+        progressText.textContent = `${i} / ${fileList.length}`;
+
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const response = await fetch(`${API_BASE}/torrents/upload?server_id=${server_id}`, {
+                method: 'POST',
+                credentials: 'include',
+                body: formData
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                result.success = true;
+                result.message = 'Added successfully';
+                result.torrent_name = data.torrent_name || null;
+                successCount++;
+            } else {
+                const error = await response.json();
+                result.message = error.detail || 'Upload failed';
+                failureCount++;
+            }
+        } catch (error) {
+            result.message = error.message || 'Network error';
+            failureCount++;
+        }
+
+        results.push(result);
+
+        // Update progress bar
+        const progress = ((i + 1) / fileList.length) * 100;
+        progressBar.style.width = `${progress}%`;
+        progressText.textContent = `${i + 1} / ${fileList.length}`;
+
+        // Add result to the list immediately
+        const resultEl = document.createElement('div');
+        resultEl.className = `flex items-center gap-2 px-2 py-1 rounded ${result.success ? 'bg-emerald-50' : 'bg-rose-50'}`;
+        const icon = result.success ? 'fa-check text-emerald-500' : 'fa-times text-rose-500';
+        const name = result.torrent_name || result.filename;
+        resultEl.innerHTML = `
+            <i class="fas ${icon}"></i>
+            <span class="truncate flex-1" title="${name}">${name}</span>
+            ${!result.success ? `<span class="text-xs text-rose-600">${result.message}</span>` : ''}
+        `;
+        resultsDiv.appendChild(resultEl);
+
+        // Scroll to show latest result
+        resultsDiv.scrollTop = resultsDiv.scrollHeight;
+    }
+
+    // Show summary after all uploads complete
+    setTimeout(() => {
+        showUploadSummary(successCount, failureCount, results);
+    }, 300);
+
+    // Refresh torrent list
     loadTorrents();
+}
+
+function showUploadSummary(successCount, failureCount, results) {
+    const progressDiv = document.getElementById('uploadProgress');
+    const summaryDiv = document.getElementById('uploadSummary');
+    const iconDiv = document.getElementById('uploadSummaryIcon');
+    const textDiv = document.getElementById('uploadSummaryText');
+    const subtextDiv = document.getElementById('uploadSummarySubtext');
+    const resultsDiv = document.getElementById('uploadSummaryResults');
+
+    progressDiv.classList.add('hidden');
+    summaryDiv.classList.remove('hidden');
+
+    const total = successCount + failureCount;
+
+    if (failureCount === 0) {
+        iconDiv.className = 'inline-flex items-center justify-center w-12 h-12 rounded-full mb-2 bg-emerald-100';
+        iconDiv.innerHTML = '<i class="fas fa-check text-emerald-600 text-xl"></i>';
+        textDiv.textContent = total === 1 ? 'Torrent Added' : `${successCount} Torrents Added`;
+        subtextDiv.textContent = 'All files uploaded successfully';
+    } else if (successCount === 0) {
+        iconDiv.className = 'inline-flex items-center justify-center w-12 h-12 rounded-full mb-2 bg-rose-100';
+        iconDiv.innerHTML = '<i class="fas fa-times text-rose-600 text-xl"></i>';
+        textDiv.textContent = 'Upload Failed';
+        subtextDiv.textContent = total === 1 ? 'Could not add torrent' : `All ${failureCount} files failed`;
+    } else {
+        iconDiv.className = 'inline-flex items-center justify-center w-12 h-12 rounded-full mb-2 bg-amber-100';
+        iconDiv.innerHTML = '<i class="fas fa-exclamation text-amber-600 text-xl"></i>';
+        textDiv.textContent = 'Partial Success';
+        subtextDiv.textContent = `${successCount} added, ${failureCount} failed`;
+    }
+
+    // Show detailed results
+    resultsDiv.innerHTML = '';
+    results.forEach(result => {
+        const resultEl = document.createElement('div');
+        resultEl.className = `flex items-center gap-2 px-2 py-1 rounded ${result.success ? 'bg-emerald-50' : 'bg-rose-50'}`;
+        const icon = result.success ? 'fa-check text-emerald-500' : 'fa-times text-rose-500';
+        const name = result.torrent_name || result.filename;
+        resultEl.innerHTML = `
+            <i class="fas ${icon} flex-shrink-0"></i>
+            <span class="truncate flex-1" title="${name}">${name}</span>
+            ${!result.success ? `<span class="text-xs text-rose-600 flex-shrink-0">${result.message}</span>` : ''}
+        `;
+        resultsDiv.appendChild(resultEl);
+    });
+}
+
+function resetUploadUI() {
+    const dropZone = document.getElementById('dropZone');
+    const progressDiv = document.getElementById('uploadProgress');
+    const summaryDiv = document.getElementById('uploadSummary');
+
+    dropZone.classList.remove('hidden');
+    progressDiv.classList.add('hidden');
+    summaryDiv.classList.add('hidden');
+
+    // Clear file input
+    document.getElementById('fileInput').value = '';
 }
 
 // Modal helpers
@@ -1510,12 +1646,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadTorrents();
     });
 
-    // Drag & Drop
+    // Drag & Drop - Multiple file support
     const dropZone = document.getElementById('dropZone');
     if (dropZone) {
         dropZone.addEventListener('click', () => document.getElementById('fileInput').click());
         document.getElementById('fileInput').addEventListener('change', e => {
-            if (e.target.files[0]) addTorrentFile(e.target.files[0]);
+            if (e.target.files.length > 0) addTorrentFiles(e.target.files);
         });
 
         dropZone.addEventListener('dragover', e => {
@@ -1528,7 +1664,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         dropZone.addEventListener('drop', e => {
             e.preventDefault();
             dropZone.classList.remove('border-indigo-500', 'bg-indigo-50');
-            if (e.dataTransfer.files[0]) addTorrentFile(e.dataTransfer.files[0]);
+            // Filter to only .torrent files
+            const torrentFiles = Array.from(e.dataTransfer.files).filter(f => f.name.endsWith('.torrent'));
+            if (torrentFiles.length > 0) addTorrentFiles(torrentFiles);
         });
     }
 });

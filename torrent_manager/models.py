@@ -215,5 +215,47 @@ class UserTorrentSettings(BaseModel):
         )
 
 
+class TorrentMetadata(BaseModel):
+    """
+    Tracks media identification and metadata for torrents.
+
+    Stores identification results from torrent_match and metadata from
+    media_metadata. Links to stored files in <info_hash>/metadata/ directory.
+
+    Status values:
+    - pending: Queued for identification
+    - processing: Currently being identified
+    - completed: Successfully identified and metadata written
+    - failed: Identification failed (see error field)
+    - low_confidence: Identified but confidence too low for auto-write
+    - manual: Manually set by user
+    """
+    torrent_hash = CharField(index=True)
+    server_id = CharField(index=True)
+    # Identification results
+    media_id = CharField(null=True)           # e.g., "id:imdb:tt0133093"
+    media_type = CharField(null=True)         # movie, tv_episode, tv_season, etc.
+    title = CharField(null=True)
+    year = IntegerField(null=True)
+    imdb_id = CharField(null=True)
+    tmdb_id = IntegerField(null=True)
+    # Confidence scoring
+    confidence = FloatField(null=True)
+    confidence_level = CharField(null=True)   # HIGH, MEDIUM, LOW, VERY_LOW
+    # Processing status
+    status = CharField(default="pending")
+    error = CharField(null=True)
+    # Timestamps
+    identified_at = DateTimeField(null=True)
+    metadata_written_at = DateTimeField(null=True)
+    created_at = DateTimeField(default=datetime.datetime.now)
+    updated_at = DateTimeField(default=datetime.datetime.now)
+
+    class Meta:
+        indexes = (
+            (('torrent_hash', 'server_id'), True),
+        )
+
+
 db.connect()
-db.create_tables([User, Session, RememberMeToken, ApiKey, TorrentServer, UserTorrent, Torrent, Status, Action, TransferJob, UserTorrentSettings])
+db.create_tables([User, Session, RememberMeToken, ApiKey, TorrentServer, UserTorrent, Torrent, Status, Action, TransferJob, UserTorrentSettings, TorrentMetadata])

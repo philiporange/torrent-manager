@@ -1,31 +1,35 @@
+from pathlib import Path
 from fastapi import APIRouter, Response
 from fastapi.responses import FileResponse
 from torrent_manager.config import Config
 
 router = APIRouter(tags=["pages"])
 
+# Static directory absolute path
+STATIC_DIR = Path(__file__).parent.parent.parent / "static"
+
 @router.get("/login")
 async def login_page():
     """Serve the login page."""
-    return FileResponse("torrent_manager/static/login.html", media_type="text/html")
+    return FileResponse(str(STATIC_DIR / "login.html"), media_type="text/html")
 
 
 @router.get("/manage-servers")
 async def servers_page():
     """Serve the server management page."""
-    return FileResponse("torrent_manager/static/servers.html", media_type="text/html")
+    return FileResponse(str(STATIC_DIR / "servers.html"), media_type="text/html")
 
 
 @router.get("/manage-api-keys")
 async def api_keys_page():
     """Serve the API key management page."""
-    return FileResponse("torrent_manager/static/api_keys.html", media_type="text/html")
+    return FileResponse(str(STATIC_DIR / "api_keys.html"), media_type="text/html")
 
 
 @router.get("/")
 async def root():
     """Serve the frontend index.html."""
-    return FileResponse("torrent_manager/static/index.html", media_type="text/html")
+    return FileResponse(str(STATIC_DIR / "index.html"), media_type="text/html")
 
 
 @router.get("/config.js")

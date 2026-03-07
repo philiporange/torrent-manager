@@ -45,6 +45,13 @@ A Python application for managing torrent client instances with a secure REST AP
 - Callbacks receive comprehensive torrent data including all database records
 - Auto-loaded from `~/.torrent_manager/callbacks/` directory
 
+### Automatic Media Identification
+- Identifies movies and TV shows from torrent names using `torrent_match`
+- Retrieves full metadata from TMDB/IMDB via `media_metadata`
+- Generates Jellyfin-compatible NFO files and downloads artwork
+- Stores metadata in `<info_hash>/metadata/` directory on servers
+- Manual identification for low-confidence or failed matches
+
 ## Quick Start
 
 ### Start the API Server
@@ -106,6 +113,51 @@ Note: For local development without HTTPS, you may need to disable the secure co
 export COOKIE_SECURE=false
 python -m torrent_manager.server --reload
 ```
+
+## Configuration
+
+The application can be configured via environment variables. Key settings include:
+
+### Client Timeout Settings
+
+```bash
+# Default timeout for user-initiated torrent client operations (default: 30s)
+CLIENT_TIMEOUT=30
+
+# Timeout for background monitoring tasks (default: 10s)
+# Used by the seeding monitor and polling service to avoid blocking on unreachable servers
+MONITOR_TIMEOUT=10
+```
+
+### Seeding and Polling Settings
+
+```bash
+# Auto-pause seeding (default: true)
+AUTO_PAUSE_SEEDING=true
+
+# Seeding durations in seconds
+PUBLIC_SEED_DURATION=0          # 0 = no auto-pause for public torrents
+PRIVATE_SEED_DURATION=604800    # 7 days for private torrents
+
+# Seeding monitor check interval (default: 60s)
+SEEDING_CHECK_INTERVAL=60
+
+# Server polling intervals
+POLL_SERVER_IDLE_INTERVAL=60    # Poll every 60s when no active downloads
+POLL_SERVER_ACTIVE_INTERVAL=15  # Poll every 15s when downloads are active
+```
+
+### Transfer Service
+
+```bash
+# Maximum concurrent transfers (default: 2)
+TRANSFER_MAX_CONCURRENT=2
+
+# Maximum retries on failure (default: 3)
+TRANSFER_MAX_RETRIES=3
+```
+
+See the Configuration sections below for callback and metadata-specific settings.
 
 ## API Documentation
 
@@ -389,3 +441,94 @@ export CALLBACK_DIR="/path/to/custom/callbacks"
 Default: `~/.torrent_manager/callbacks/`
 
 See `examples/example_callback.py` for more callback examples.
+
+## Automatic Media Identification
+
+The metadata service automatically identifies media content (movies, TV shows) from torrent names and retrieves comprehensive metadata from TMDB/IMDB.
+
+### How It Works
+
+1. **On torrent added**: The `MetadataIdentifyCallback` triggers automatic identification
+2. **Label check**: If a torrent label contains a media ID (e.g., `id:imdb:tt0133093` or `tt0133093`), it's used directly
+3. **Name-based identification**: Otherwise, `torrent_match` analyzes the torrent name and file structure
+4. **Metadata retrieval**: `media_metadata` fetches full details from TMDB/IMDB
+5. **File generation**: Jellyfin-compatible NFO files and artwork are written to the server
+
+### Using Labels for Identification
+
+If you already know the media ID, add it as a torrent label to skip name-based identification:
+
+- `id:imdb:tt0133093` - Full format with IMDB ID
+- `tt0133093` - Bare IMDB ID (auto-converted)
+- `id:tmdb:movie:603` - TMDB movie ID
+- `id:tmdb:tv:1396` - TMDB TV show ID
+
+Label-based identification has 100% confidence and skips the parsing step entirely.
+
+### Stored Files
+
+Metadata is stored in `<download_dir>/<info_hash>/metadata/`:
+
+```
+metadata/
+├── media.id              # Standardized ID (e.g., "id:imdb:tt0133093")
+├── media.json            # Full metadata as JSON
+├── media.nfo             # Jellyfin-compatible NFO file
+├── poster.jpg            # Movie/show poster
+├── fanart.jpg            # Background artwork
+└── identification.json   # Raw identification output with confidence
+```
+
+### API Endpoints
+
+```bash
+# Get metadata status
+GET /torrents/{info_hash}/metadata
+
+# Trigger identification (or re-identify with force=true)
+POST /torrents/{info_hash}/identify?force=false
+
+# Manually set media ID
+PUT /torrents/{info_hash}/metadata?media_id=id:imdb:tt0133093
+```
+
+### Configuration
+
+```bash
+# Enable/disable automatic identification (default: true)
+METADATA_AUTO_IDENTIFY=true
+
+# Minimum confidence to write metadata (default: 0.7)
+METADATA_MIN_CONFIDENCE=0.7
+
+# Download poster/fanart images (default: true)
+METADATA_DOWNLOAD_ARTWORK=true
+
+# Generate Jellyfin NFO files (default: true)
+METADATA_GENERATE_NFO=true
+
+# Use LLM fallback for difficult identifications (default: false)
+METADATA_USE_LLM_FALLBACK=false
+
+# TMDB API key (required for metadata enrichment)
+TMDB_API_KEY=your_api_key
+```
+
+### Confidence Levels
+
+- **HIGH** (0.85+): Strong match, metadata written automatically
+- **MEDIUM** (0.70-0.84): Good match, metadata written automatically
+- **LOW** (0.50-0.69): Weak match, flagged for review
+- **VERY_LOW** (<0.50): Poor match, requires manual identification
+
+### Manual Identification
+
+For low-confidence or failed identifications:
+
+```bash
+# Set the correct media ID
+curl -X PUT "http://localhost:8144/torrents/{hash}/metadata?media_id=id:imdb:tt0133093" \
+  -H "Authorization: Bearer <api_key>"
+```
+
+See [METADATA_PLAN.md](METADATA_PLAN.md) for detailed architecture documentation.
