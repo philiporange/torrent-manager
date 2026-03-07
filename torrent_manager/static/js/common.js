@@ -190,6 +190,7 @@ async function injectNavbar(activePage) {
 
     const links = [
         { name: 'Torrents', href: '/', icon: 'bolt' },
+        { name: 'RSS', href: '/manage-rss', icon: 'rss' },
         { name: 'Servers', href: '/manage-servers', icon: 'server' },
         { name: 'API Keys', href: '/manage-api-keys', icon: 'key' }
     ];

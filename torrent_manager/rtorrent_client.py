@@ -46,6 +46,7 @@ from .config import Config
 from .logger import logger
 from .torrent_file import TorrentFile, TorrentFileError, InvalidTorrentFileError, MissingRequiredKeyError
 from .magnet_link import MagnetLink
+from .utils import rate_limited_get
 
 
 RTORRENT_RPC_URL = Config.RTORRENT_RPC_URL
@@ -177,6 +178,31 @@ class RTorrentClient(BaseTorrentClient):
                 return False
         return True
 
+
+    def _load_with_target_fallback(self, method_name: Optional[str], payload):
+        """Call an rTorrent load method, trying configured view first and legacy blank target second."""
+        load_method = self.client.load
+        method = load_method if method_name in (None, "") else getattr(load_method, method_name)
+        targets = []
+        if self.view is not None:
+            targets.append(self.view)
+        if "" not in targets:
+            targets.append("")
+
+        last_fault = None
+        for target in targets:
+            try:
+                return method(target, payload)
+            except client.Fault as e:
+                if "invalid target" in e.faultString.lower():
+                    last_fault = e
+                    continue
+                raise
+
+        if last_fault:
+            raise last_fault
+        raise ValueError(f"Failed to call load method {method_name}")
+
     def add_torrent(self, path, start=True, priority=1, labels: Optional[List[str]] = None):
         # Get info_hash
         try:
@@ -201,9 +227,9 @@ class RTorrentClient(BaseTorrentClient):
             with open(path, "rb") as f:
                 data = f.read()
             if start:
-                result = self.client.load.raw_start("", client.Binary(data))
+                result = self._load_with_target_fallback("raw_start", client.Binary(data))
             else:
-                result = self.client.load.raw("", client.Binary(data))
+                result = self._load_with_target_fallback("raw", client.Binary(data))
         except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
             self._handle_network_error(e, "add_torrent")
 
@@ -259,9 +285,9 @@ class RTorrentClient(BaseTorrentClient):
             info_hash = tf.info_hash()
 
             if start:
-                result = self.client.load.raw_start(self.view, client.Binary(data))
+                result = self._load_with_target_fallback("raw_start", client.Binary(data))
             else:
-                result = self.client.load.raw(self.view, client.Binary(data))
+                result = self._load_with_target_fallback("raw", client.Binary(data))
         except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
             os.remove(path)
             self._handle_network_error(e, "add_torrent_url")
@@ -287,9 +313,9 @@ class RTorrentClient(BaseTorrentClient):
             info_hash = ml.info_hash
 
             if start:
-                result = self.client.load.start("", uri)
+                result = self._load_with_target_fallback("start", uri)
             else:
-                result = self.client.load("", uri)
+                result = self._load_with_target_fallback(None, uri)
 
             if result == 0:
                 logger.debug(f"Added magnet to rTorrent: {info_hash}")
@@ -602,7 +628,7 @@ class RTorrentClient(BaseTorrentClient):
 
     def _download_torrent_file(self, url):
         """Download a .torrent file from a URL to a temporary file."""
-        response = requests.get(url)
+        response = rate_limited_get(url)
         response.raise_for_status()
 
         temp_dir = tempfile.gettempdir()

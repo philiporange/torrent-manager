@@ -1,12 +1,26 @@
-import time
+"""Shared filesystem and network helpers for torrent operations.
+
+Includes local data move helpers plus a simple per-host HTTP rate limiter for
+fetching remote `.torrent` files from tracker download endpoints. The limiter is
+process-local and ensures repeated URL fetches do not exceed the configured
+minimum interval between requests to the same host.
+"""
+
 import os
 import shutil
+import threading
+import time
+from urllib.parse import urlparse
+
+import requests
 
 from .config import Config
 from .logger import logger
 
 
 COMPLETE_PATH = Config.COMPLETE_PATH
+_download_rate_limit_lock = threading.Lock()
+_download_last_request_by_host: dict[str, float] = {}
 
 
 def move(client, info_hash, destination=COMPLETE_PATH):
@@ -94,3 +108,25 @@ def move_torrent(client, info_hash, new_location):
         # Attempt to restart the torrent in case of failure
         client.start(info_hash)
         return False
+
+
+def rate_limited_get(url: str, *, min_interval_seconds: int | None = None, timeout: int | None = None, **kwargs):
+    """Fetch a URL while enforcing a minimum interval between requests to the same host."""
+    interval = Config.TORRENT_URL_MIN_INTERVAL if min_interval_seconds is None else min_interval_seconds
+    timeout = Config.CLIENT_TIMEOUT if timeout is None else timeout
+    parsed = urlparse(url)
+    host_key = parsed.netloc.lower() or parsed.path
+
+    while True:
+        with _download_rate_limit_lock:
+            now = time.monotonic()
+            last_request = _download_last_request_by_host.get(host_key)
+            wait_time = 0.0 if last_request is None else max(0.0, interval - (now - last_request))
+            if wait_time <= 0:
+                _download_last_request_by_host[host_key] = now
+                break
+        if wait_time > 0:
+            logger.debug(f"Rate limiting torrent URL fetch for {host_key}; sleeping {wait_time:.2f}s")
+            time.sleep(wait_time)
+
+    return requests.get(url, timeout=timeout, **kwargs)

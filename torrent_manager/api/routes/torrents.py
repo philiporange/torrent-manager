@@ -1,6 +1,5 @@
 import os
 import re
-import shutil
 import tempfile
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
@@ -8,13 +7,12 @@ from torrent_manager.models import TorrentServer, TransferJob, UserTorrentSettin
 from torrent_manager.client_factory import get_client
 from torrent_manager.config import Config
 from torrent_manager.logger import logger
-from torrent_manager.magnet_link import MagnetLink
 from torrent_manager.torrent_file import TorrentFile
 from torrent_manager.trackers import get_cached_trackers, is_augmentation_enabled
-from torrent_manager.magnet_resolver import is_resolver_enabled, resolve_magnet, MagnetResolverError
 from torrent_manager.activity import Activity
 from torrent_manager.polling import get_poller
 from torrent_manager.callbacks import dispatch_event, TorrentEvent
+from torrent_manager.torrent_adder import add_torrent_to_server
 from ..schemas import (
     AddTorrentRequest, TorrentActionRequest, SetLabelsRequest, AddLabelRequest,
     StartTransferRequest, UpdateTorrentSettingsRequest
@@ -22,10 +20,6 @@ from ..schemas import (
 from ..dependencies import get_current_user, get_user_server, find_torrent_server
 
 router = APIRouter(tags=["torrents"])
-
-# Regex patterns for info hash detection
-INFO_HASH_HEX_PATTERN = re.compile(r'^[a-fA-F0-9]{40}$')
-INFO_HASH_BASE32_PATTERN = re.compile(r'^[A-Za-z2-7]{32}$')
 
 
 def check_server_available(server):
@@ -43,15 +37,6 @@ def check_server_available(server):
             detail=f"Server {server.name} is temporarily unavailable (in cooldown until {time.ctime(cache.skip_until)}). Recent error: {cache.error}"
         )
 
-
-def is_info_hash(value: str) -> bool:
-    """Check if a string is a valid info hash (40 hex chars or 32 base32 chars)."""
-    return bool(INFO_HASH_HEX_PATTERN.match(value) or INFO_HASH_BASE32_PATTERN.match(value))
-
-
-def info_hash_to_magnet(info_hash: str) -> str:
-    """Convert an info hash to a magnet URI."""
-    return f"magnet:?xt=urn:btih:{info_hash.upper()}"
 
 @router.get("/torrents")
 async def list_torrents(
@@ -73,29 +58,6 @@ async def list_torrents(
     """
     poller = get_poller()
     return poller.get_cached_torrents(user.id, server_id)
-
-
-def augment_magnet_with_trackers(magnet_uri: str) -> str:
-    """
-    Augment a magnet URI with cached public trackers.
-
-    Magnet links are always considered public (no private flag),
-    so trackers are added if augmentation is enabled.
-    """
-    if not is_augmentation_enabled():
-        return magnet_uri
-
-    try:
-        magnet = MagnetLink(magnet_uri)
-        for tracker in get_cached_trackers():
-            magnet.add_tracker(tracker)
-        augmented = magnet.to_uri()
-        logger.debug(f"Augmented magnet with {len(get_cached_trackers())} trackers")
-        return augmented
-    except Exception as e:
-        logger.warning(f"Failed to augment magnet URI: {e}")
-        return magnet_uri
-
 
 def add_torrent_from_file(client, torrent_path: str, start: bool, labels: list, augment: bool = True) -> bool:
     """
@@ -124,114 +86,34 @@ def add_torrent_from_file(client, torrent_path: str, start: bool, labels: list, 
 
     return client.add_torrent(torrent_path, start=start, labels=labels)
 
-
-def _cleanup_torrent_path(torrent_path: Optional[str]):
-    """Clean up a temporary torrent file and its parent directory if applicable."""
-    if not torrent_path:
-        return
-    parent_dir = os.path.dirname(torrent_path)
-    if "magnet_resolve_" in parent_dir:
-        shutil.rmtree(parent_dir, ignore_errors=True)
-    elif os.path.exists(torrent_path):
-        os.remove(torrent_path)
-
-
 @router.post("/torrents")
 async def add_torrent(request: AddTorrentRequest, user: User = Depends(get_current_user)):
-    """
-    Add a torrent by info hash, magnet URI, or HTTP/HTTPS URL to a specific server.
-
-    Supports:
-    - Info hashes (40 hex chars or 32 base32 chars)
-    - Magnet URIs (magnet:?xt=urn:btih:...)
-    - HTTP/HTTPS URLs to .torrent files
-
-    Magnet URIs are first converted to .torrent files using magnet2torrent
-    (downloads from cache sites or peers), then uploaded to the server.
-
-    Public torrents (magnets, info hashes, or non-private .torrent files) are
-    augmented with additional public trackers to speed up peer discovery.
-    """
+    """Add a torrent by info hash, magnet URI, or HTTP/HTTPS URL to a specific server."""
     server = get_user_server(request.server_id, user)
     check_server_available(server)
-    torrent_path = None
 
     try:
-        client = get_client(server)
-        uri = request.uri.strip()
-
-        # Convert info hash to magnet URI
-        if is_info_hash(uri):
-            uri = info_hash_to_magnet(uri)
-            logger.info(f"Converted info hash to magnet URI")
-
-        if uri.startswith("magnet:"):
-            # Use magnet resolver to convert magnet to .torrent file
-            if is_resolver_enabled():
-                try:
-                    logger.info(f"Resolving magnet URI to .torrent file")
-                    torrent_path, info_hash = resolve_magnet(uri)
-                    result = add_torrent_from_file(
-                        client, torrent_path,
-                        start=request.start,
-                        labels=request.labels,
-                        augment=True
-                    )
-                except MagnetResolverError as e:
-                    logger.warning(f"Magnet resolution failed, falling back to direct add: {e}")
-                    # Fall back to direct magnet add
-                    uri = augment_magnet_with_trackers(uri)
-                    result = client.add_magnet(uri, start=request.start, labels=request.labels)
-            else:
-                # Resolver disabled, use direct magnet add
-                uri = augment_magnet_with_trackers(uri)
-                result = client.add_magnet(uri, start=request.start, labels=request.labels)
-        elif uri.startswith("http://") or uri.startswith("https://"):
-            result = client.add_torrent_url(uri, start=request.start, labels=request.labels)
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Input must be an info hash, magnet link, or HTTP/HTTPS URL"
-            )
-
-        # Clean up temporary torrent file and its directory
-        _cleanup_torrent_path(torrent_path)
-
-        if result:
-            # Immediately poll the server to update cache
-            poller = get_poller()
-            await poller.poll_server(server)
-
-            # Dispatch callback for newly added torrent
-            torrents = poller.get_cached_torrents(user.id, server.id)
-            for t in torrents:
-                if uri.upper() in t.get("info_hash", "").upper() or t.get("name", "") in uri:
-                    await dispatch_event(TorrentEvent.ADDED, t)
-                    break
-
-            return {
-                "message": "Torrent added successfully",
-                "uri": uri,
-                "server_id": server.id,
-                "server_name": server.name
-            }
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to add torrent to {server.name}"
-            )
-    except HTTPException:
-        raise
+        result = await add_torrent_to_server(
+            server,
+            request.uri,
+            start=request.start,
+            labels=request.labels,
+            user_id=user.id,
+        )
+        return {
+            "message": "Torrent added successfully",
+            "uri": result["uri"],
+            "server_id": server.id,
+            "server_name": server.name,
+        }
     except ValueError as e:
         logger.error(f"Invalid torrent: {e}")
-        _cleanup_torrent_path(torrent_path)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
     except Exception as e:
         logger.error(f"Failed to add torrent: {e}")
-        _cleanup_torrent_path(torrent_path)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to add torrent: {str(e)}"

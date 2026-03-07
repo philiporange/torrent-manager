@@ -4,7 +4,8 @@ Database models for the torrent manager application.
 Includes models for user authentication (User, Session, RememberMeToken, ApiKey),
 torrent server configuration (TorrentServer with HTTP download, local mount, and
 auto-download via rsync over SSH), torrent tracking (Torrent, Status, Action),
-and file transfer management (TransferJob, UserTorrentSettings).
+file transfer management (TransferJob, UserTorrentSettings), automatic metadata
+identification (TorrentMetadata), and RSS feed automation (RSSFeed, RSSFeedItem).
 """
 
 import datetime
@@ -76,6 +77,7 @@ class TorrentServer(BaseModel):
     ssh_user = CharField(null=True)  # SSH username
     ssh_key_path = CharField(null=True)  # Path to SSH private key
 
+
 class Session(BaseModel):
     """
     Stores user session data with sliding expiration.
@@ -88,6 +90,7 @@ class Session(BaseModel):
     expires_at = DateTimeField()
     ip_address = CharField(null=True)
     user_agent = CharField(null=True)
+
 
 class RememberMeToken(BaseModel):
     """
@@ -102,6 +105,7 @@ class RememberMeToken(BaseModel):
     user_agent = CharField(null=True)
     revoked = BooleanField(default=False)
 
+
 class ApiKey(BaseModel):
     """
     Stores API keys for programmatic authentication.
@@ -114,6 +118,7 @@ class ApiKey(BaseModel):
     last_used_at = DateTimeField(null=True)
     expires_at = DateTimeField(null=True)  # Optional expiration
     revoked = BooleanField(default=False)
+
 
 class UserTorrent(BaseModel):
     user = CharField(index=True)
@@ -211,7 +216,7 @@ class UserTorrentSettings(BaseModel):
 
     class Meta:
         indexes = (
-            (('user_id', 'server_id', 'torrent_hash'), True),
+            (("user_id", "server_id", "torrent_hash"), True),
         )
 
 
@@ -232,20 +237,16 @@ class TorrentMetadata(BaseModel):
     """
     torrent_hash = CharField(index=True)
     server_id = CharField(index=True)
-    # Identification results
-    media_id = CharField(null=True)           # e.g., "id:imdb:tt0133093"
-    media_type = CharField(null=True)         # movie, tv_episode, tv_season, etc.
+    media_id = CharField(null=True)
+    media_type = CharField(null=True)
     title = CharField(null=True)
     year = IntegerField(null=True)
     imdb_id = CharField(null=True)
     tmdb_id = IntegerField(null=True)
-    # Confidence scoring
     confidence = FloatField(null=True)
-    confidence_level = CharField(null=True)   # HIGH, MEDIUM, LOW, VERY_LOW
-    # Processing status
+    confidence_level = CharField(null=True)
     status = CharField(default="pending")
     error = CharField(null=True)
-    # Timestamps
     identified_at = DateTimeField(null=True)
     metadata_written_at = DateTimeField(null=True)
     created_at = DateTimeField(default=datetime.datetime.now)
@@ -253,9 +254,80 @@ class TorrentMetadata(BaseModel):
 
     class Meta:
         indexes = (
-            (('torrent_hash', 'server_id'), True),
+            (("torrent_hash", "server_id"), True),
         )
 
 
-db.connect()
-db.create_tables([User, Session, RememberMeToken, ApiKey, TorrentServer, UserTorrent, Torrent, Status, Action, TransferJob, UserTorrentSettings, TorrentMetadata])
+class RSSFeed(BaseModel):
+    """
+    Stores RSS feed configuration for automatic torrent ingestion.
+
+    Each feed belongs to a user, targets a specific torrent server, and applies
+    a configurable delay before newly detected items are added to the client.
+    Background polling updates status fields for monitoring in the API and UI.
+    """
+    id = CharField(primary_key=True)
+    user_id = CharField(index=True)
+    server_id = CharField(index=True)
+    name = CharField()
+    url = CharField()
+    delay_hours = IntegerField(default=0)
+    enabled = BooleanField(default=True)
+    created_at = DateTimeField(default=datetime.datetime.now)
+    last_checked_at = DateTimeField(null=True)
+    last_success_at = DateTimeField(null=True)
+    last_error = CharField(null=True)
+    last_item_count = IntegerField(default=0)
+
+
+class RSSFeedItem(BaseModel):
+    """
+    Tracks RSS-discovered torrents and their add lifecycle.
+
+    Items are deduplicated per user by fingerprint so the same torrent entry is
+    only scheduled once even if multiple feeds surface it. Pending items wait
+    until next_attempt_at, which implements the per-feed delay before add.
+    """
+    id = CharField(primary_key=True)
+    feed_id = CharField(index=True)
+    user_id = CharField(index=True)
+    server_id = CharField(index=True)
+    title = CharField()
+    guid = CharField(null=True)
+    link = CharField(null=True)
+    uri = CharField()
+    fingerprint = CharField(index=True)
+    info_hash = CharField(null=True, index=True)
+    status = CharField(default="pending")  # pending, added, skipped
+    detected_at = DateTimeField(default=datetime.datetime.now)
+    next_attempt_at = DateTimeField(index=True)
+    added_at = DateTimeField(null=True)
+    last_error = CharField(null=True)
+    attempt_count = IntegerField(default=0)
+
+    class Meta:
+        indexes = (
+            (("user_id", "fingerprint"), True),
+        )
+
+
+db.connect(reuse_if_open=True)
+db.create_tables(
+    [
+        User,
+        Session,
+        RememberMeToken,
+        ApiKey,
+        TorrentServer,
+        UserTorrent,
+        Torrent,
+        Status,
+        Action,
+        TransferJob,
+        UserTorrentSettings,
+        TorrentMetadata,
+        RSSFeed,
+        RSSFeedItem,
+    ],
+    safe=True,
+)
