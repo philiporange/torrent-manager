@@ -74,6 +74,9 @@ TRANSFER_MAX_RETRIES = 3      # Max retries on failure
 # RSS polling settings
 RSS_POLL_INTERVAL = 300       # Check RSS feeds every 5 minutes
 RSS_RETRY_DELAY = 900         # Retry failed RSS adds after 15 minutes
+RSS_429_BACKOFF_BASE = 1800   # First 429 retry waits 30 minutes
+RSS_429_BACKOFF_MULTIPLIER = 2
+RSS_429_BACKOFF_MAX = 21600   # Cap 429 retry backoff at 6 hours
 
 # Remote torrent file download throttling
 TORRENT_URL_MIN_INTERVAL = 5  # Minimum seconds between HTTP .torrent fetches per host
@@ -167,6 +170,9 @@ class Config:
     # RSS polling settings
     RSS_POLL_INTERVAL = int(os.getenv("RSS_POLL_INTERVAL", str(RSS_POLL_INTERVAL)))
     RSS_RETRY_DELAY = int(os.getenv("RSS_RETRY_DELAY", str(RSS_RETRY_DELAY)))
+    RSS_429_BACKOFF_BASE = int(os.getenv("RSS_429_BACKOFF_BASE", str(RSS_429_BACKOFF_BASE)))
+    RSS_429_BACKOFF_MULTIPLIER = int(os.getenv("RSS_429_BACKOFF_MULTIPLIER", str(RSS_429_BACKOFF_MULTIPLIER)))
+    RSS_429_BACKOFF_MAX = int(os.getenv("RSS_429_BACKOFF_MAX", str(RSS_429_BACKOFF_MAX)))
     RSS_RATE_LIMIT_DELAY = float(os.getenv("RSS_RATE_LIMIT_DELAY", str(RSS_RATE_LIMIT_DELAY)))
     RSS_MAX_ITEMS_PER_CYCLE = int(os.getenv("RSS_MAX_ITEMS_PER_CYCLE", str(RSS_MAX_ITEMS_PER_CYCLE)))
 
