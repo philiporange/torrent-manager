@@ -28,6 +28,22 @@ INFO_HASH_HEX_PATTERN = re.compile(r'^[a-fA-F0-9]{40}$')
 INFO_HASH_BASE32_PATTERN = re.compile(r'^[A-Za-z2-7]{32}$')
 
 
+def check_server_available(server):
+    """
+    Check if a server is available (not in circuit breaker cooldown).
+
+    Raises HTTPException if the server is in cooldown.
+    """
+    import time
+    poller = get_poller()
+    cache = poller._cache.get(server.id)
+    if cache and cache.skip_until > 0 and cache.skip_until > time.time():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Server {server.name} is temporarily unavailable (in cooldown until {time.ctime(cache.skip_until)}). Recent error: {cache.error}"
+        )
+
+
 def is_info_hash(value: str) -> bool:
     """Check if a string is a valid info hash (40 hex chars or 32 base32 chars)."""
     return bool(INFO_HASH_HEX_PATTERN.match(value) or INFO_HASH_BASE32_PATTERN.match(value))
@@ -137,6 +153,7 @@ async def add_torrent(request: AddTorrentRequest, user: User = Depends(get_curre
     augmented with additional public trackers to speed up peer discovery.
     """
     server = get_user_server(request.server_id, user)
+    check_server_available(server)
     torrent_path = None
 
     try:
@@ -235,6 +252,7 @@ async def upload_torrent(
     trackers to speed up peer discovery.
     """
     server = get_user_server(server_id, user)
+    check_server_available(server)
     tmp_path = None
 
     try:
@@ -250,17 +268,20 @@ async def upload_torrent(
             tmp.flush()
             tmp_path = tmp.name
 
-        # Augment public torrents with additional trackers
-        if is_augmentation_enabled():
-            try:
-                torrent = TorrentFile(tmp_path)
-                if not torrent.is_private:
-                    trackers = get_cached_trackers()
-                    torrent.add_trackers(trackers)
-                    torrent.save(tmp_path)
-                    logger.debug(f"Augmented torrent with {len(trackers)} trackers")
-            except Exception as e:
-                logger.warning(f"Failed to augment torrent file: {e}")
+        # Parse torrent to get name and augment if needed
+        torrent_name = None
+        try:
+            torrent = TorrentFile(tmp_path)
+            torrent_name = torrent.info.get('name')
+
+            # Augment public torrents with additional trackers
+            if is_augmentation_enabled() and not torrent.is_private:
+                trackers = get_cached_trackers()
+                torrent.add_trackers(trackers)
+                torrent.save(tmp_path)
+                logger.debug(f"Augmented torrent with {len(trackers)} trackers")
+        except Exception as e:
+            logger.warning(f"Failed to parse/augment torrent file: {e}")
 
         client = get_client(server)
         result = client.add_torrent(tmp_path, start=start)
@@ -281,7 +302,8 @@ async def upload_torrent(
             return {
                 "message": "Torrent uploaded and added successfully",
                 "server_id": server.id,
-                "server_name": server.name
+                "server_name": server.name,
+                "torrent_name": torrent_name
             }
         else:
             raise HTTPException(
@@ -308,6 +330,101 @@ async def upload_torrent(
         )
 
 
+@router.post("/torrents/upload/batch")
+async def upload_torrents_batch(
+    files: list[UploadFile] = File(...),
+    server_id: str = Query(..., description="Server to add torrents to"),
+    start: bool = True,
+    user: User = Depends(get_current_user)
+):
+    """
+    Upload multiple .torrent files at once to a specific server.
+
+    Returns detailed results for each file including success/failure status.
+    Processing continues even if some files fail.
+    """
+    server = get_user_server(server_id, user)
+    check_server_available(server)
+    client = get_client(server)
+
+    results = []
+    success_count = 0
+    failure_count = 0
+
+    for file in files:
+        tmp_path = None
+        result_entry = {
+            "filename": file.filename,
+            "success": False,
+            "message": "",
+            "torrent_name": None
+        }
+
+        try:
+            if not file.filename.endswith('.torrent'):
+                result_entry["message"] = "File must have .torrent extension"
+                failure_count += 1
+                results.append(result_entry)
+                continue
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".torrent") as tmp:
+                content = await file.read()
+                tmp.write(content)
+                tmp.flush()
+                tmp_path = tmp.name
+
+            # Try to get torrent name for better feedback
+            torrent_name = None
+            try:
+                torrent = TorrentFile(tmp_path)
+                torrent_name = torrent.info.get('name')
+                result_entry["torrent_name"] = torrent_name
+
+                # Augment public torrents with additional trackers
+                if is_augmentation_enabled() and not torrent.is_private:
+                    trackers = get_cached_trackers()
+                    torrent.add_trackers(trackers)
+                    torrent.save(tmp_path)
+            except Exception as e:
+                logger.warning(f"Failed to parse/augment torrent file {file.filename}: {e}")
+
+            add_result = client.add_torrent(tmp_path, start=start)
+
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+            if add_result:
+                result_entry["success"] = True
+                result_entry["message"] = "Added successfully"
+                success_count += 1
+            else:
+                result_entry["message"] = "Failed to add torrent to client"
+                failure_count += 1
+
+        except Exception as e:
+            logger.error(f"Failed to upload torrent {file.filename}: {e}")
+            result_entry["message"] = str(e)
+            failure_count += 1
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+        results.append(result_entry)
+
+    # Poll server once after all uploads
+    if success_count > 0:
+        poller = get_poller()
+        await poller.poll_server(server)
+
+    return {
+        "total": len(files),
+        "success_count": success_count,
+        "failure_count": failure_count,
+        "server_id": server.id,
+        "server_name": server.name,
+        "results": results
+    }
+
+
 @router.get("/torrents/{info_hash}")
 async def get_torrent_info(
     info_hash: str,
@@ -321,6 +438,7 @@ async def get_torrent_info(
     """
     if server_id:
         server = get_user_server(server_id, user)
+        check_server_available(server)
         try:
             client = get_client(server)
             torrent = next(client.get_torrent(info_hash), None)
@@ -360,6 +478,7 @@ async def start_torrent(
     """Start a paused torrent."""
     if server_id:
         server = get_user_server(server_id, user)
+        check_server_available(server)
         client = get_client(server)
     else:
         server, client, _ = find_torrent_server(info_hash, user)
@@ -368,6 +487,7 @@ async def start_torrent(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Torrent not found on any server"
             )
+        check_server_available(server)
 
     try:
         client.start(info_hash)
@@ -420,6 +540,7 @@ async def stop_torrent(
     """Stop/pause a torrent."""
     if server_id:
         server = get_user_server(server_id, user)
+        check_server_available(server)
         client = get_client(server)
     else:
         server, client, _ = find_torrent_server(info_hash, user)
@@ -428,6 +549,7 @@ async def stop_torrent(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Torrent not found on any server"
             )
+        check_server_available(server)
 
     try:
         client.stop(info_hash)
@@ -537,6 +659,7 @@ async def delete_torrent(
     """
     if server_id:
         server = get_user_server(server_id, user)
+        check_server_available(server)
         client = get_client(server)
     else:
         server, client, _ = find_torrent_server(info_hash, user)
@@ -545,6 +668,7 @@ async def delete_torrent(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Torrent not found on any server"
             )
+        check_server_available(server)
 
     try:
         # Capture torrent info before deletion for callback
@@ -1066,4 +1190,242 @@ async def update_torrent_settings(
         "download_path": settings.download_path,
         "auto_download": settings.auto_download,
         "auto_delete_remote": settings.auto_delete_remote
+    }
+
+
+# === Media Metadata Endpoints ===
+
+@router.get("/torrents/{info_hash}/metadata")
+async def get_torrent_metadata(
+    info_hash: str,
+    server_id: Optional[str] = Query(None, description="Server ID"),
+    user: User = Depends(get_current_user)
+):
+    """
+    Get media identification and metadata for a torrent.
+
+    Returns the identified media (movie/TV show), confidence level,
+    and any retrieved metadata.
+    """
+    from torrent_manager.metadata_service import get_metadata_service
+    from torrent_manager.models import TorrentMetadata
+
+    # Find server if not specified
+    if not server_id:
+        server, _, _ = find_torrent_server(info_hash, user)
+        if server:
+            server_id = server.id
+
+    if not server_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Torrent not found on any server"
+        )
+
+    service = get_metadata_service()
+    status_data = service.get_status(info_hash, server_id)
+
+    if not status_data:
+        return {
+            "info_hash": info_hash,
+            "server_id": server_id,
+            "status": "not_processed",
+            "message": "Metadata not yet processed for this torrent"
+        }
+
+    return status_data
+
+
+@router.post("/torrents/{info_hash}/identify")
+async def identify_torrent_metadata(
+    info_hash: str,
+    server_id: Optional[str] = Query(None, description="Server ID"),
+    force: bool = Query(False, description="Re-identify even if already processed"),
+    user: User = Depends(get_current_user)
+):
+    """
+    Trigger media identification for a torrent.
+
+    Identifies the media content from the torrent name and files,
+    retrieves metadata from TMDB/IMDB, and writes metadata files
+    to the torrent's metadata/ directory.
+    """
+    from torrent_manager.metadata_service import get_metadata_service
+
+    # Find server and torrent
+    if server_id:
+        server = get_user_server(server_id, user)
+    else:
+        server, _, _ = find_torrent_server(info_hash, user)
+        if not server:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Torrent not found on any server"
+            )
+
+    # Get torrent info from cache
+    poller = get_poller()
+    torrents = poller.get_cached_torrents(user.id, server.id)
+    torrent = next(
+        (t for t in torrents if t["info_hash"].upper() == info_hash.upper()),
+        None
+    )
+
+    if not torrent:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Torrent not found in cache"
+        )
+
+    # Get file list
+    files = None
+    from torrent_manager.models import Torrent as TorrentModel
+    db_torrent = TorrentModel.get_or_none(
+        (TorrentModel.torrent_hash == info_hash.upper()) &
+        (TorrentModel.server_id == server.id)
+    )
+    if db_torrent and db_torrent.files:
+        files = db_torrent.files if isinstance(db_torrent.files, list) else None
+
+    # Get labels (may contain media ID like "id:imdb:tt0133093")
+    labels = torrent.get("labels", [])
+
+    # Process
+    service = get_metadata_service()
+    result = await service.process_torrent(
+        torrent_hash=info_hash,
+        torrent_name=torrent.get("name", ""),
+        server=server,
+        files=files,
+        labels=labels,
+        force=force
+    )
+
+    return {
+        "info_hash": info_hash,
+        "server_id": server.id,
+        "status": result.status,
+        "identification": {
+            "media_id": result.identification.media_id if result.identification else None,
+            "media_type": result.identification.media_type if result.identification else None,
+            "title": result.identification.title if result.identification else None,
+            "year": result.identification.year if result.identification else None,
+            "confidence": result.identification.confidence if result.identification else None,
+            "confidence_level": result.identification.confidence_level if result.identification else None,
+        } if result.identification else None,
+        "files_written": result.files_written,
+        "error": result.error
+    }
+
+
+@router.put("/torrents/{info_hash}/metadata")
+async def set_torrent_metadata(
+    info_hash: str,
+    media_id: str = Query(..., description="Media ID (e.g., id:imdb:tt0133093)"),
+    server_id: Optional[str] = Query(None, description="Server ID"),
+    user: User = Depends(get_current_user)
+):
+    """
+    Manually set the media identification for a torrent.
+
+    Use this to correct an incorrect identification or to manually
+    identify a torrent that couldn't be automatically identified.
+    """
+    from torrent_manager.metadata_service import get_metadata_service
+    from torrent_manager.models import TorrentMetadata
+    from datetime import datetime
+
+    # Find server
+    if server_id:
+        server = get_user_server(server_id, user)
+    else:
+        server, _, _ = find_torrent_server(info_hash, user)
+        if not server:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Torrent not found on any server"
+            )
+
+    # Validate media_id format
+    if not media_id.startswith("id:"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid media_id format. Expected: id:imdb:ttXXXXXXX or id:tmdb:movie:XXXXX"
+        )
+
+    service = get_metadata_service()
+
+    # Fetch metadata for the provided ID
+    metadata_result = service.fetch_metadata(media_id)
+
+    if not metadata_result.success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could not fetch metadata for {media_id}: {metadata_result.error}"
+        )
+
+    # Parse media_id for database record
+    parts = media_id.split(":")
+    imdb_id = None
+    tmdb_id = None
+    if len(parts) >= 3:
+        if parts[1] == "imdb":
+            imdb_id = parts[2]
+        elif parts[1] == "tmdb" and len(parts) >= 4:
+            try:
+                tmdb_id = int(parts[3])
+            except ValueError:
+                pass
+
+    # Get or create metadata record
+    record, created = TorrentMetadata.get_or_create(
+        torrent_hash=info_hash.upper(),
+        server_id=server.id
+    )
+
+    # Update record
+    record.media_id = media_id
+    record.media_type = metadata_result.metadata.get("media_type", "unknown")
+    record.title = metadata_result.metadata.get("title")
+    record.year = metadata_result.metadata.get("year")
+    record.imdb_id = imdb_id
+    record.tmdb_id = tmdb_id
+    record.confidence = 1.0  # Manual = full confidence
+    record.confidence_level = "MANUAL"
+    record.status = "manual"
+    record.error = None
+    record.identified_at = datetime.now()
+    record.updated_at = datetime.now()
+    record.save()
+
+    # Write metadata files
+    from torrent_manager.metadata_service import IdentificationResult
+    identification = IdentificationResult(
+        success=True,
+        media_id=media_id,
+        media_type=record.media_type,
+        title=record.title,
+        year=record.year,
+        imdb_id=imdb_id,
+        tmdb_id=tmdb_id,
+        confidence=1.0,
+        confidence_level="MANUAL",
+        raw_result={"manual": True, "media_id": media_id}
+    )
+
+    files_written = await service.write_metadata_files(
+        server, info_hash, identification, metadata_result
+    )
+
+    record.metadata_written_at = datetime.now()
+    record.save()
+
+    return {
+        "info_hash": info_hash,
+        "server_id": server.id,
+        "media_id": media_id,
+        "title": record.title,
+        "year": record.year,
+        "files_written": files_written,
+        "message": "Metadata manually set"
     }

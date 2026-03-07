@@ -4,13 +4,31 @@ RTorrent XMLRPC client with comprehensive error handling and configurable timeou
 Provides the RTorrentClient class for interacting with rTorrent via XMLRPC,
 including adding torrents from files/URLs/magnets, managing torrent state,
 and querying torrent information. Features detailed error messages for
-invalid or malformed torrent files and configurable connection timeouts
-to prevent blocking on unreachable servers.
+invalid or malformed torrent files and configurable connection and operation
+timeouts to prevent blocking on unreachable or slow servers.
 
 Supports both HTTP and HTTPS connections with automatic selection of the
-appropriate transport layer based on the URL scheme.
+appropriate transport layer based on the URL scheme. Timeouts apply to both
+connection establishment and individual XMLRPC operations.
+
+Error handling includes:
+- Network errors (DNS resolution failures, connection timeouts, connection refused,
+  network unreachable) are caught in all XMLRPC operations and re-raised as
+  ConnectionError with concise context including hostname.
+- XML parsing errors (malformed responses, "syntax error: line 1, column 0") are
+  treated as ConnectionErrors to trigger circuit breaker behavior, as they
+  indicate the server is down or returning invalid responses (e.g., HTML error pages).
+- XML-RPC protocol errors (Fault exceptions) are caught and re-raised as ValueError
+  with descriptive messages.
+- All client methods that make network calls wrap socket-level and XML-RPC errors
+  to provide consistent error messages across the API.
 
 Labels are stored in d.custom1 (ruTorrent compatible) as comma-separated values.
+
+The list_torrents() method uses d.multicall2 to efficiently fetch torrent data from
+rTorrent. When querying a specific torrent by info_hash, the method retrieves all
+torrents and filters client-side, as d.multicall2's first parameter is a target
+view/download, not a filter criterion.
 """
 
 import os
@@ -19,6 +37,7 @@ import tempfile
 import time
 from typing import Any, Dict, Generator, List, Optional
 from xmlrpc import client
+from http.client import HTTPConnection, HTTPSConnection
 
 import requests
 
@@ -39,12 +58,13 @@ class TimeoutTransport(client.Transport):
         self.timeout = timeout
 
     def make_connection(self, host):
-        # Set default socket timeout before making connection
+        # Extract actual hostname from host string (may contain user:pass@host:port)
+        host_info, self._extra_headers, _ = self.get_host_info(host)
+        # Set socket default timeout to handle DNS resolution timeouts
         old_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(self.timeout)
         try:
-            conn = super().make_connection(host)
-            conn.timeout = self.timeout
+            socket.setdefaulttimeout(self.timeout)
+            conn = HTTPConnection(host_info, timeout=self.timeout)
             return conn
         finally:
             socket.setdefaulttimeout(old_timeout)
@@ -57,12 +77,13 @@ class TimeoutSafeTransport(client.SafeTransport):
         self.timeout = timeout
 
     def make_connection(self, host):
-        # Set default socket timeout before making connection
+        # Extract actual hostname from host string (may contain user:pass@host:port)
+        host_info, self._extra_headers, _ = self.get_host_info(host)
+        # Set socket default timeout to handle DNS resolution timeouts
         old_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(self.timeout)
         try:
-            conn = super().make_connection(host)
-            conn.timeout = self.timeout
+            socket.setdefaulttimeout(self.timeout)
+            conn = HTTPSConnection(host_info, timeout=self.timeout)
             return conn
         finally:
             socket.setdefaulttimeout(old_timeout)
@@ -72,6 +93,10 @@ class RTorrentClient(BaseTorrentClient):
     def __init__(self, url: str = RTORRENT_RPC_URL, view: str = "main", timeout: int = 10):
         self.url = url
         self.timeout = timeout
+        # Extract hostname for error messages
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        self.hostname = parsed.hostname or parsed.netloc or url
         # Use SafeTransport for HTTPS, Transport for HTTP
         if url.startswith('https://'):
             transport = TimeoutSafeTransport(timeout=timeout)
@@ -79,6 +104,44 @@ class RTorrentClient(BaseTorrentClient):
             transport = TimeoutTransport(timeout=timeout)
         self.client = client.ServerProxy(url, transport=transport)
         self.view = view
+
+    def _handle_network_error(self, e: Exception, operation: str = "operation"):
+        """Wrap network errors with better context about the server."""
+        if isinstance(e, socket.gaierror):
+            raise ConnectionError(f"DNS resolution failed for {self.hostname}") from e
+        elif isinstance(e, socket.timeout):
+            raise ConnectionError(f"Connection timeout to {self.hostname}") from e
+        elif isinstance(e, (ConnectionRefusedError, ConnectionResetError)):
+            raise ConnectionError(f"Connection refused by {self.hostname}") from e
+        elif isinstance(e, OSError):
+            # Handle network unreachable and other OS-level network errors
+            error_str = str(e).lower()
+            if 'network is unreachable' in error_str or 'errno 101' in error_str:
+                raise ConnectionError(f"Network unreachable to {self.hostname}") from e
+            else:
+                raise ConnectionError(f"Failed to connect to {self.hostname}") from e
+        else:
+            # Re-raise other exceptions as-is
+            raise
+
+    def _handle_xmlrpc_error(self, e: Exception, operation: str):
+        """Handle XML-RPC protocol errors with better context."""
+        error_str = str(e).lower()
+
+        # XML parsing errors indicate the server returned non-XML (likely HTML error page or empty response)
+        # These should be treated as connection issues to trigger circuit breaker
+        if "syntax error" in error_str or "expat" in error_str or "parse" in error_str:
+            raise ConnectionError(
+                f"Malformed XML-RPC response from {self.hostname} during {operation}: "
+                f"server may be down or misconfigured"
+            ) from e
+
+        # XML-RPC Fault exceptions are legitimate API errors
+        if isinstance(e, client.Fault):
+            raise ValueError(f"Failed to {operation}: {e.faultString}") from e
+
+        # Other exceptions
+        raise
 
     def __getattr__(self, name):
         return getattr(self.client, name)
@@ -88,6 +151,12 @@ class RTorrentClient(BaseTorrentClient):
         try:
             self.client.system.client_version()
             return True
+        except socket.gaierror as e:
+            logger.error(f"DNS resolution failed for rTorrent server {self.url}: {e}")
+            return False
+        except socket.timeout as e:
+            logger.error(f"Connection timeout to rTorrent at {self.url}: {e}")
+            return False
         except Exception as e:
             logger.error(f"Failed to connect to rTorrent at {self.url}: {e}")
             return False
@@ -128,24 +197,33 @@ class RTorrentClient(BaseTorrentClient):
         info_hash = tf.info_hash()
 
         # Add torrent
-        with open(path, "rb") as f:
-            data = f.read()
-        if start:
-            result = self.client.load.raw_start("", client.Binary(data))
-        else:
-            result = self.client.load.raw("", client.Binary(data))
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            if start:
+                result = self.client.load.raw_start("", client.Binary(data))
+            else:
+                result = self.client.load.raw("", client.Binary(data))
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "add_torrent")
 
         # Set priority
-        if priority != 1:
-            if self.is_multi_file(info_hash):
-                for i in range(len(tf.files())):
-                    self.set_file_priority(info_hash, i, priority)
-            else:
-                self.set_priority(info_hash, priority)
+        try:
+            if priority != 1:
+                if self.is_multi_file(info_hash):
+                    for i in range(len(tf.files())):
+                        self.set_file_priority(info_hash, i, priority)
+                else:
+                    self.set_priority(info_hash, priority)
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "add_torrent")
 
         # Set labels
-        if labels and result == 0:
-            self.set_labels(info_hash, labels)
+        try:
+            if labels and result == 0:
+                self.set_labels(info_hash, labels)
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "add_torrent")
 
         return result == 0
 
@@ -175,14 +253,18 @@ class RTorrentClient(BaseTorrentClient):
             os.remove(path)
             raise ValueError(f"Failed to parse torrent file from URL: {e}")
 
-        with open(path, "rb") as f:
-            data = f.read()
-        info_hash = tf.info_hash()
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+            info_hash = tf.info_hash()
 
-        if start:
-            result = self.client.load.raw_start(self.view, client.Binary(data))
-        else:
-            result = self.client.load.raw(self.view, client.Binary(data))
+            if start:
+                result = self.client.load.raw_start(self.view, client.Binary(data))
+            else:
+                result = self.client.load.raw(self.view, client.Binary(data))
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            os.remove(path)
+            self._handle_network_error(e, "add_torrent_url")
 
         if priority != 1:
             if self.is_multi_file(info_hash):
@@ -223,19 +305,31 @@ class RTorrentClient(BaseTorrentClient):
             logger.error(f"rTorrent rejected magnet: {info_hash}")
             return False
 
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "add_magnet")
         except Exception as e:
             logger.error(f"Failed to add magnet to rTorrent: {e}", exc_info=True)
             return False
 
     def stop(self, info_hash):
-        return self.client.d.stop(info_hash)
+        try:
+            return self.client.d.stop(info_hash)
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "stop")
+        except (client.Fault, Exception) as e:
+            self._handle_xmlrpc_error(e, "stop torrent")
     
     def stop_all(self):
         for info_hash in self.list_all_info_hashes():
             self.stop(info_hash)
     
     def start(self, info_hash):
-        return self.client.d.start(info_hash)
+        try:
+            return self.client.d.start(info_hash)
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "start")
+        except (client.Fault, Exception) as e:
+            self._handle_xmlrpc_error(e, "start torrent")
 
     def start_all(self):
         for info_hash in self.list_all_info_hashes():
@@ -243,8 +337,11 @@ class RTorrentClient(BaseTorrentClient):
 
     def erase(self, info_hash, stop_first=True, wait=True, delete_data=False):
         if stop_first:
-            self.stop(info_hash)
-            time.sleep(1)
+            try:
+                self.stop(info_hash)
+                time.sleep(1)
+            except Exception as e:
+                logger.warning(f"Failed to stop torrent before erase {info_hash}: {e}")
 
         # Get the data path before erasing (needed for delete_data)
         data_path = None
@@ -254,7 +351,12 @@ class RTorrentClient(BaseTorrentClient):
             except Exception as e:
                 logger.warning(f"Failed to get base path for {info_hash}: {e}")
 
-        result = self.client.d.erase(info_hash)
+        try:
+            result = self.client.d.erase(info_hash)
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "erase")
+        except (client.Fault, Exception) as e:
+            self._handle_xmlrpc_error(e, "erase torrent")
 
         # Delete the data files if requested
         if delete_data and data_path and os.path.exists(data_path):
@@ -278,13 +380,28 @@ class RTorrentClient(BaseTorrentClient):
             self.erase(info_hash)
 
     def is_multi_file(self, info_hash):
-        return self.client.d.is_multi_file(info_hash)
+        try:
+            return self.client.d.is_multi_file(info_hash)
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "is_multi_file")
+        except (client.Fault, Exception) as e:
+            self._handle_xmlrpc_error(e, "check multi-file")
     
     def base_path(self, info_hash):
-        return self.client.d.base_path(info_hash)
+        try:
+            return self.client.d.base_path(info_hash)
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "base_path")
+        except (client.Fault, Exception) as e:
+            self._handle_xmlrpc_error(e, "get base path")
 
     def list_all_info_hashes(self):
-        return self.client.download_list("")
+        try:
+            return self.client.download_list("")
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "list_all_info_hashes")
+        except (client.Fault, Exception) as e:
+            self._handle_xmlrpc_error(e, "list info hashes")
 
     def list_torrents(self, info_hash="", files=False) -> Generator[Dict[str, Any], None, None]:
         keys = [
@@ -305,24 +422,32 @@ class RTorrentClient(BaseTorrentClient):
             "priority",
             "is_private",
         ]
-        data = self.client.d.multicall2(info_hash, self.view,
-            "d.hash=",
-            "d.name=",
-            "d.base_path=",
-            "d.directory=",
-            "d.size_bytes=",
-            "d.is_multi_file=",
-            "d.bytes_done=",
-            "d.state=",
-            "d.is_active=",
-            "d.complete=",
-            "d.ratio=",
-            "d.up.rate=",
-            "d.down.rate=",
-            "d.peers_connected=",
-            "d.priority=",
-            "d.is_private=",
-        )
+        try:
+            # When querying a specific torrent, use empty string for view parameter
+            # and filter the results afterward. The first parameter is the target,
+            # not a filter - passing info_hash here treats it as a view name.
+            data = self.client.d.multicall2("", self.view,
+                "d.hash=",
+                "d.name=",
+                "d.base_path=",
+                "d.directory=",
+                "d.size_bytes=",
+                "d.is_multi_file=",
+                "d.bytes_done=",
+                "d.state=",
+                "d.is_active=",
+                "d.complete=",
+                "d.ratio=",
+                "d.up.rate=",
+                "d.down.rate=",
+                "d.peers_connected=",
+                "d.priority=",
+                "d.is_private=",
+            )
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "list_torrents")
+        except (client.Fault, Exception) as e:
+            self._handle_xmlrpc_error(e, "list torrents")
 
         # Convert data to dictionary
         items = []
@@ -436,7 +561,13 @@ class RTorrentClient(BaseTorrentClient):
         return self.client.d.tied_to_file(info_hash)
     
     def files(self, info_hash, pattern=""):
-        file_data = self.client.f.multicall(info_hash, pattern, "f.path=", "f.size_bytes=", "f.size_chunks=", "f.completed_chunks=", "f.priority=")
+        try:
+            file_data = self.client.f.multicall(info_hash, pattern, "f.path=", "f.size_bytes=", "f.size_chunks=", "f.completed_chunks=", "f.priority=")
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "files")
+        except (client.Fault, Exception) as e:
+            self._handle_xmlrpc_error(e, "get files")
+
         for i, f in enumerate(file_data):
             path, size, size_chunks, completed_chunks, priority = f
             progress = completed_chunks / size_chunks if size_chunks > 0 else 0
@@ -449,11 +580,21 @@ class RTorrentClient(BaseTorrentClient):
             }
 
     def set_priority(self, info_hash, priority=0):
-        return self.client.d.priority.set(info_hash, priority)
+        try:
+            return self.client.d.priority.set(info_hash, priority)
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "set_priority")
+        except (client.Fault, Exception) as e:
+            self._handle_xmlrpc_error(e, "set priority")
 
     def set_file_priority(self, info_hash, file_index, priority):
-        file_id = f"{info_hash}:f{file_index}"
-        return self.client.f.priority.set(file_id, priority)
+        try:
+            file_id = f"{info_hash}:f{file_index}"
+            return self.client.f.priority.set(file_id, priority)
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "set_file_priority")
+        except (client.Fault, Exception) as e:
+            self._handle_xmlrpc_error(e, "set file priority")
 
     def set_file_priorities(self, info_hash, priorities):
         for file_index, priority in priorities:
@@ -484,9 +625,13 @@ class RTorrentClient(BaseTorrentClient):
             if not label_str:
                 return []
             return [l.strip() for l in label_str.split(',') if l.strip()]
-        except Exception as e:
-            logger.error(f"Failed to get labels for {info_hash}: {e}")
-            return []
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "get_labels")
+        except (client.Fault, Exception) as e:
+            try:
+                self._handle_xmlrpc_error(e, "get labels")
+            except (ConnectionError, ValueError):
+                return []
 
     def set_labels(self, info_hash: str, labels: List[str]) -> bool:
         """
@@ -498,9 +643,13 @@ class RTorrentClient(BaseTorrentClient):
             label_str = ','.join(labels)
             result = self.client.d.custom1.set(info_hash, label_str)
             return result == 0
-        except Exception as e:
-            logger.error(f"Failed to set labels for {info_hash}: {e}")
-            return False
+        except (socket.gaierror, socket.timeout, ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "set_labels")
+        except (client.Fault, Exception) as e:
+            try:
+                self._handle_xmlrpc_error(e, "set labels")
+            except (ConnectionError, ValueError):
+                return False
 
     def add_label(self, info_hash: str, label: str) -> bool:
         """Add a label to a torrent without removing existing labels."""

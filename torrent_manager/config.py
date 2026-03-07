@@ -3,7 +3,9 @@ import tempfile
 import dotenv
 
 
-dotenv.load_dotenv()
+# Load environment from multiple locations (later files override earlier)
+dotenv.load_dotenv(os.path.expanduser("~/.env"))  # Global user config
+dotenv.load_dotenv()  # Project .env
 
 
 # Defaults
@@ -62,8 +64,20 @@ MAGNET_RESOLVER_HTTP_PROXY = None
 TRANSFER_MAX_CONCURRENT = 2   # Maximum concurrent transfers
 TRANSFER_MAX_RETRIES = 3      # Max retries on failure
 
+# Client timeout settings (in seconds)
+CLIENT_TIMEOUT = 30           # Default timeout for torrent client operations
+MONITOR_TIMEOUT = 30          # Timeout for background monitoring tasks
+
 # Callback settings (lifecycle hooks for torrents)
 CALLBACK_DIR = os.path.expanduser("~/.torrent_manager/callbacks")
+
+# Metadata service settings (automatic media identification)
+METADATA_AUTO_IDENTIFY = True         # Enable automatic identification on torrent add
+METADATA_MIN_CONFIDENCE = 0.7         # Minimum confidence to write metadata files
+METADATA_DOWNLOAD_ARTWORK = True      # Download poster/fanart images
+METADATA_GENERATE_NFO = True          # Generate Jellyfin NFO files
+METADATA_USE_LLM_FALLBACK = False     # Use LLM for low-confidence identifications
+TMDB_API_KEY = None                   # TMDB API key for metadata enrichment
 
 
 class Config:
@@ -134,8 +148,20 @@ class Config:
     TRANSFER_MAX_CONCURRENT = int(os.getenv("TRANSFER_MAX_CONCURRENT", str(TRANSFER_MAX_CONCURRENT)))
     TRANSFER_MAX_RETRIES = int(os.getenv("TRANSFER_MAX_RETRIES", str(TRANSFER_MAX_RETRIES)))
 
+    # Client timeout settings
+    CLIENT_TIMEOUT = int(os.getenv("CLIENT_TIMEOUT", str(CLIENT_TIMEOUT)))
+    MONITOR_TIMEOUT = int(os.getenv("MONITOR_TIMEOUT", str(MONITOR_TIMEOUT)))
+
     # Callback settings
     CALLBACK_DIR = os.getenv("CALLBACK_DIR", CALLBACK_DIR)
+
+    # Metadata service settings
+    METADATA_AUTO_IDENTIFY = os.getenv("METADATA_AUTO_IDENTIFY", str(METADATA_AUTO_IDENTIFY)).lower() == "true"
+    METADATA_MIN_CONFIDENCE = float(os.getenv("METADATA_MIN_CONFIDENCE", str(METADATA_MIN_CONFIDENCE)))
+    METADATA_DOWNLOAD_ARTWORK = os.getenv("METADATA_DOWNLOAD_ARTWORK", str(METADATA_DOWNLOAD_ARTWORK)).lower() == "true"
+    METADATA_GENERATE_NFO = os.getenv("METADATA_GENERATE_NFO", str(METADATA_GENERATE_NFO)).lower() == "true"
+    METADATA_USE_LLM_FALLBACK = os.getenv("METADATA_USE_LLM_FALLBACK", str(METADATA_USE_LLM_FALLBACK)).lower() == "true"
+    TMDB_API_KEY = os.getenv("TMDB_API_KEY", TMDB_API_KEY)
 
     @property
     def API_BASE_URL(self):

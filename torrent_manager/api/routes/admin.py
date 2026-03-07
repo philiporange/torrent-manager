@@ -10,6 +10,7 @@ validates the session cookie manually due to WebSocket auth limitations.
 """
 import asyncio
 import os
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket
 from fastapi.responses import FileResponse
 from starlette.websockets import WebSocketDisconnect
@@ -22,6 +23,9 @@ from ..constants import SESSION_COOKIE_NAME
 
 router = APIRouter(tags=["admin"])
 config = Config()
+
+# Static directory absolute path
+STATIC_DIR = Path(__file__).parent.parent.parent / "static"
 
 @router.get("/admin/users")
 async def list_users(admin: User = Depends(get_current_admin)):
@@ -143,4 +147,4 @@ async def websocket_logs(websocket: WebSocket):
 @router.get("/admin/console")
 async def admin_page(user: User = Depends(get_current_admin)):
     """Serve the admin console page."""
-    return FileResponse("torrent_manager/static/admin.html", media_type="text/html")
+    return FileResponse(str(STATIC_DIR / "admin.html"), media_type="text/html")

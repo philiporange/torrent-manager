@@ -2,21 +2,23 @@
 FastAPI application for Torrent Manager.
 
 Integrates multiple background services:
-- Seeding monitor for auto-pause of completed torrents (with error tracking to reduce log noise)
-- Torrent poller for tracking torrent status
+- Seeding monitor for auto-pause of completed torrents (uses poller's cached data)
+- Torrent poller for tracking torrent status (with circuit breaker for failed servers)
 - Transfer service for auto-download of completed torrents
 - Media streaming worker for HLS transcoding via media_server
 
 The HLS output directory is mounted at /media for serving transcoded streams.
 
-Error handling includes reduced-frequency logging for persistent server connection
-failures to prevent log spam when servers are unreachable.
+The seeding monitor uses the poller's cached torrent data to avoid duplicate RPC calls
+and respects the poller's circuit breaker for unreachable servers. Server connection
+errors are handled by the poller with reduced-frequency logging to prevent log spam.
 """
 import asyncio
 import datetime
 import mimetypes
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -36,87 +38,75 @@ from .routes.auth import set_session_cookie
 
 
 async def seeding_monitor_task():
-    """Background task to monitor seeding duration and auto-pause torrents."""
-    from torrent_manager.models import TorrentServer
-    from torrent_manager.client_factory import get_client
+    """
+    Background task to monitor seeding duration and auto-pause torrents.
+
+    Uses the TorrentPoller's cached data to avoid duplicate RPC calls and respect
+    the polling service's circuit breaker for failed servers.
+    """
     from torrent_manager.activity import Activity
     import time
-
-    # Track errors per server to reduce log noise for persistent failures
-    server_errors = {}
 
     while True:
         try:
             if Config.AUTO_PAUSE_SEEDING:
                 activity = Activity()
+                poller = get_poller()
 
-                for server in TorrentServer.select().where(TorrentServer.enabled == True):
+                # Get cached torrents from the poller for all servers
+                # This avoids duplicate RPC calls and respects the poller's circuit breaker
+                for server_id, cache in poller._cache.items():
+                    # Skip servers with errors - the poller already handles error logging
+                    if cache.error:
+                        continue
+
+                    # Get the server model
+                    from torrent_manager.models import TorrentServer
                     try:
-                        client = get_client(server)
-                        for torrent in client.list_torrents():
-                            info_hash = torrent['info_hash']
-                            is_seeding = torrent.get('is_active') and torrent.get('complete')
-                            is_private = torrent.get('is_private', False)
+                        server = TorrentServer.get_by_id(server_id)
+                    except:
+                        continue
 
-                            # Record status for duration tracking
-                            activity.record_torrent_status(
-                                info_hash,
-                                server_id=server.id,
-                                is_seeding=is_seeding,
-                                is_private=is_private
-                            )
+                    if not server.enabled:
+                        continue
 
-                            # Check for auto-pause if actively seeding
-                            if is_seeding:
-                                duration = activity.calculate_seeding_duration(
-                                    info_hash,
-                                    max_interval=Config.MAX_INTERVAL
-                                )
-                                threshold = (Config.PRIVATE_SEED_DURATION if is_private
-                                           else Config.PUBLIC_SEED_DURATION)
+                    # Process torrents from cache
+                    for torrent in cache.torrents:
+                        info_hash = torrent['info_hash']
+                        is_seeding = torrent.get('is_active') and torrent.get('complete')
+                        is_private = torrent.get('is_private', False)
 
-                                if duration >= threshold:
-                                    name = torrent.get('name', info_hash)
-                                    hours = duration / 3600
-                                    logger.info(
-                                        f"Auto-pausing {'private' if is_private else 'public'} "
-                                        f"torrent: {name} (seeded {hours:.1f}h)"
-                                    )
-                                    client.stop(info_hash)
-
-                        # Clear error tracking on successful server processing
-                        if server.id in server_errors:
-                            del server_errors[server.id]
-
-                    except Exception as e:
-                        current_time = time.time()
-
-                        if server.id not in server_errors:
-                            server_errors[server.id] = {
-                                'count': 0,
-                                'last_logged': 0.0
-                            }
-
-                        server_errors[server.id]['count'] += 1
-                        error_count = server_errors[server.id]['count']
-                        last_logged = server_errors[server.id]['last_logged']
-
-                        # Log errors with reduced frequency for persistent failures
-                        should_log = (
-                            error_count == 1 or
-                            error_count == 5 or
-                            (current_time - last_logged) >= 600
+                        # Record status for duration tracking
+                        activity.record_torrent_status(
+                            info_hash,
+                            server_id=server.id,
+                            is_seeding=is_seeding,
+                            is_private=is_private
                         )
 
-                        if should_log:
-                            if error_count == 1:
-                                logger.error(f"Error monitoring server {server.name}: {e}")
-                            else:
-                                logger.error(
-                                    f"Error monitoring server {server.name} "
-                                    f"({error_count} consecutive failures): {e}"
+                        # Check for auto-pause if actively seeding
+                        if is_seeding:
+                            duration = activity.calculate_seeding_duration(
+                                info_hash,
+                                max_interval=Config.MAX_INTERVAL
+                            )
+                            threshold = (Config.PRIVATE_SEED_DURATION if is_private
+                                       else Config.PUBLIC_SEED_DURATION)
+
+                            if duration >= threshold:
+                                name = torrent.get('name', info_hash)
+                                hours = duration / 3600
+                                logger.info(
+                                    f"Auto-pausing {'private' if is_private else 'public'} "
+                                    f"torrent: {name} (seeded {hours:.1f}h)"
                                 )
-                            server_errors[server.id]['last_logged'] = current_time
+                                # Need to get client to actually stop the torrent
+                                try:
+                                    from torrent_manager.client_factory import get_client
+                                    client = get_client(server, timeout=Config.MONITOR_TIMEOUT)
+                                    client.stop(info_hash)
+                                except Exception as e:
+                                    logger.error(f"Failed to auto-pause torrent {info_hash} on {server.name}: {e}")
 
                 activity.close()
         except Exception as e:
@@ -195,8 +185,9 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="torrent_manager/static"), name="static")
+# Mount static files using absolute path
+STATIC_DIR = Path(__file__).parent.parent / "static"
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Mount HLS media output for streaming
 media_cfg.HLS_DIR.mkdir(parents=True, exist_ok=True)

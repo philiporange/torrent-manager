@@ -1,8 +1,10 @@
 import pytest
 import os
 import time
+from unittest.mock import Mock, patch
 from torrent_manager.config import Config
 from torrent_manager.transmission_client import TransmissionClient
+from transmission_rpc.error import TransmissionError, TransmissionConnectError
 
 
 TRANSMISSION_HOST = Config.TRANSMISSION_HOST
@@ -109,6 +111,155 @@ class TestTransmissionClient:
         # Check if torrent is removed
         torrents = list(transmission_client.list_torrents())
         assert all(t['info_hash'] != info_hash for t in torrents), "Failed to remove torrent"
+
+class TestTransmissionClientErrorHandling:
+    """Test error handling for invalid RPC endpoints and network errors."""
+
+    @patch('torrent_manager.transmission_client.TransmissionRPCClient')
+    def test_json_parse_error_handling(self, mock_rpc_client):
+        """Test that JSON parse errors are converted to helpful ConnectionError messages."""
+        # Mock the RPC client to avoid actual connection
+        mock_rpc_client.return_value = Mock()
+
+        client = TransmissionClient(
+            protocol="http",
+            host="example.com",
+            port=443,
+            path="/wrong/path",
+            timeout=10
+        )
+
+        mock_transmission_error = TransmissionError("failed to parse response as json")
+
+        with pytest.raises(ConnectionError) as exc_info:
+            client._handle_network_error(mock_transmission_error, "test_operation")
+
+        error_msg = str(exc_info.value)
+        assert "Invalid RPC endpoint" in error_msg
+        assert "example.com:443" in error_msg
+        assert "check rpc_path configuration" in error_msg
+
+    @patch('torrent_manager.transmission_client.TransmissionRPCClient')
+    def test_dns_error_handling(self, mock_rpc_client):
+        """Test that DNS errors are properly detected and reported."""
+        # Mock the RPC client to avoid actual connection
+        mock_rpc_client.return_value = Mock()
+
+        client = TransmissionClient(
+            protocol="http",
+            host="nonexistent.example.com",
+            port=9091,
+            timeout=10
+        )
+
+        mock_transmission_error = TransmissionError("Name or service not known")
+
+        with pytest.raises(ConnectionError) as exc_info:
+            client._handle_network_error(mock_transmission_error, "test_operation")
+
+        error_msg = str(exc_info.value)
+        assert "DNS resolution failed" in error_msg or "Failed to connect" in error_msg
+
+    @patch('torrent_manager.transmission_client.TransmissionRPCClient')
+    def test_timeout_error_handling(self, mock_rpc_client):
+        """Test that timeout errors are properly handled."""
+        # Mock the RPC client to avoid actual connection
+        mock_rpc_client.return_value = Mock()
+
+        client = TransmissionClient(
+            protocol="http",
+            host="example.com",
+            port=9091,
+            timeout=10
+        )
+
+        mock_transmission_error = TransmissionError("timeout occurred")
+
+        with pytest.raises(ConnectionError) as exc_info:
+            client._handle_network_error(mock_transmission_error, "test_operation")
+
+        error_msg = str(exc_info.value)
+        assert "timeout" in error_msg.lower()
+
+    @patch('torrent_manager.transmission_client.TransmissionRPCClient')
+    def test_network_unreachable_error_handling(self, mock_rpc_client):
+        """Test that network unreachable errors are properly handled."""
+        # Mock the RPC client to avoid actual connection
+        mock_rpc_client.return_value = Mock()
+
+        client = TransmissionClient(
+            protocol="http",
+            host="example.com",
+            port=9091,
+            timeout=10
+        )
+
+        # Test TransmissionError with network unreachable message
+        mock_transmission_error = TransmissionError(
+            "Max retries exceeded with url: /transmission/rpc "
+            "(Caused by NewConnectionError('Failed to establish a new connection: "
+            "[Errno 101] Network is unreachable'))"
+        )
+
+        with pytest.raises(ConnectionError) as exc_info:
+            client._handle_network_error(mock_transmission_error, "test_operation")
+
+        error_msg = str(exc_info.value)
+        assert "Network unreachable" in error_msg
+        assert "example.com:9091" in error_msg
+
+    @patch('torrent_manager.transmission_client.TransmissionRPCClient')
+    def test_transmission_connect_error_network_unreachable(self, mock_rpc_client):
+        """Test that TransmissionConnectError with network unreachable is properly handled."""
+        # Mock the RPC client to avoid actual connection
+        mock_rpc_client.return_value = Mock()
+
+        client = TransmissionClient(
+            protocol="http",
+            host="example.com",
+            port=9091,
+            timeout=10
+        )
+
+        # Test TransmissionConnectError with network unreachable (this is the common case)
+        mock_connect_error = TransmissionConnectError(
+            "can't connect to transmission daemon: "
+            "HTTPSConnectionPool(host='example.com', port=9091): "
+            "Max retries exceeded with url: /transmission/rpc "
+            "(Caused by NewConnectionError('HTTPSConnection(host='example.com', port=9091): "
+            "Failed to establish a new connection: [Errno 101] Network is unreachable'))"
+        )
+
+        with pytest.raises(ConnectionError) as exc_info:
+            client._handle_network_error(mock_connect_error, "test_operation")
+
+        error_msg = str(exc_info.value)
+        assert "Network unreachable" in error_msg
+        assert "example.com:9091" in error_msg
+
+    @patch('torrent_manager.transmission_client.TransmissionRPCClient')
+    def test_oserror_network_unreachable_handling(self, mock_rpc_client):
+        """Test that OSError with errno 101 (network unreachable) is properly handled."""
+        # Mock the RPC client to avoid actual connection
+        mock_rpc_client.return_value = Mock()
+
+        client = TransmissionClient(
+            protocol="http",
+            host="example.com",
+            port=9091,
+            timeout=10
+        )
+
+        # Test OSError with errno 101
+        mock_os_error = OSError(101, "Network is unreachable")
+
+        with pytest.raises(ConnectionError) as exc_info:
+            client._handle_network_error(mock_os_error, "test_operation")
+
+        error_msg = str(exc_info.value)
+        assert "Network unreachable" in error_msg
+        assert "example.com:9091" in error_msg
+
 
 if __name__ == '__main__':
     pytest.main()

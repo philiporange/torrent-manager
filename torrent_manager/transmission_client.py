@@ -8,6 +8,22 @@ Includes configurable connection timeouts to prevent blocking on unreachable ser
 Methods that operate on specific torrents raise ValueError when the torrent is not found,
 ensuring consistent error handling across the API layer.
 
+Network errors (DNS resolution failures, connection timeouts, connection refused,
+network unreachable) are caught in all RPC operations and re-raised as ConnectionError
+with concise context including hostname and port. Handles all transmission_rpc
+exception types (TransmissionError and its subclasses: TransmissionTimeoutError,
+TransmissionConnectError, TransmissionAuthError) which wrap underlying socket errors.
+Error messages are kept clean by avoiding redundant wrapper text from transmission_rpc.
+
+Network unreachable errors (errno 101) are specifically detected in TransmissionConnectError
+exceptions and converted to ConnectionError with "Network unreachable" in the message,
+enabling the polling service to activate the circuit breaker pattern with extended cooldown.
+
+JSON parsing errors (when server returns HTML instead of JSON, typically due to 404
+or other HTTP errors) are detected and converted to ConnectionError with a message
+indicating invalid RPC endpoint configuration. This typically indicates the rpc_path
+is incorrect for the server.
+
 Requires transmission_rpc >= 7.0 which uses get_files() and file_count property.
 Labels are stored using Transmission's native labels field (requires Transmission >= 3.0).
 """
@@ -20,6 +36,12 @@ from typing import Any, Dict, Generator, List, Optional
 import requests
 from transmission_rpc import Client as TransmissionRPCClient
 from transmission_rpc.torrent import Torrent as TransmissionTorrent
+from transmission_rpc.error import (
+    TransmissionError,
+    TransmissionConnectError,
+    TransmissionTimeoutError,
+    TransmissionAuthError
+)
 
 from .base_client import BaseTorrentClient
 from .config import Config
@@ -62,21 +84,94 @@ class TransmissionClient(BaseTorrentClient):
                 password=password or None,
                 timeout=timeout
             )
+        except (TransmissionError, socket.gaierror, socket.timeout,
+                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            socket.setdefaulttimeout(old_timeout)
+            self._handle_network_error(e, "connect")
         finally:
             socket.setdefaulttimeout(old_timeout)
 
+    def _handle_network_error(self, e: Exception, operation: str = "operation"):
+        """Wrap network errors with better context about the server."""
+        # Get the underlying error from the exception chain to avoid redundant messages
+        underlying = e.__cause__ or e.__context__ or e
+        underlying_msg = str(underlying)
+
+        # Handle transmission_rpc specific errors
+        if isinstance(e, TransmissionTimeoutError):
+            raise ConnectionError(f"Connection timeout to {self.host}:{self.port}") from e
+        elif isinstance(e, TransmissionConnectError):
+            # TransmissionConnectError may wrap DNS errors or connection refused
+            # Check if the original exception contains DNS error indicators
+            error_str = str(e).lower()
+            if 'name or service not known' in error_str or 'nodename nor servname provided' in error_str:
+                raise ConnectionError(f"DNS resolution failed for {self.host}") from e
+            elif 'connection refused' in error_str:
+                raise ConnectionError(f"Connection refused by {self.host}:{self.port}") from e
+            elif 'network is unreachable' in error_str or 'errno 101' in error_str:
+                raise ConnectionError(f"Network unreachable to {self.host}:{self.port}") from e
+            else:
+                raise ConnectionError(f"Failed to connect to {self.host}:{self.port}") from e
+        elif isinstance(e, TransmissionAuthError):
+            raise ConnectionError(f"Authentication failed for {self.host}:{self.port}") from e
+        elif isinstance(e, TransmissionError):
+            # Handle any other TransmissionError (like generic timeout or JSON parse errors)
+            error_str = str(e).lower().strip()
+            if 'timeout' in error_str:
+                raise ConnectionError(f"Connection timeout to {self.host}:{self.port}") from e
+            elif 'network is unreachable' in error_str or 'errno 101' in error_str:
+                raise ConnectionError(f"Network unreachable to {self.host}:{self.port}") from e
+            elif 'parse' in error_str and 'json' in error_str:
+                raise ConnectionError(f"Invalid RPC endpoint for {self.host}:{self.port} - server returned non-JSON response (check rpc_path configuration)") from e
+            elif 'name or service not known' in error_str or 'nodename nor servname provided' in error_str:
+                raise ConnectionError(f"DNS resolution failed for {self.host}") from e
+            elif 'connection refused' in error_str:
+                raise ConnectionError(f"Connection refused by {self.host}:{self.port}") from e
+            else:
+                raise ConnectionError(f"Failed to connect to {self.host}:{self.port}") from e
+        # Handle raw socket errors (in case they're not wrapped)
+        elif isinstance(e, socket.gaierror):
+            raise ConnectionError(f"DNS resolution failed for {self.host}") from e
+        elif isinstance(e, socket.timeout):
+            raise ConnectionError(f"Connection timeout to {self.host}:{self.port}") from e
+        elif isinstance(e, (ConnectionRefusedError, ConnectionResetError)):
+            raise ConnectionError(f"Connection refused by {self.host}:{self.port}") from e
+        elif isinstance(e, OSError):
+            # Handle network unreachable and other OS-level network errors
+            error_str = str(e).lower()
+            if 'network is unreachable' in error_str or 'errno 101' in error_str:
+                raise ConnectionError(f"Network unreachable to {self.host}:{self.port}") from e
+            else:
+                raise ConnectionError(f"Failed to connect to {self.host}:{self.port}") from e
+        else:
+            # Re-raise other exceptions as-is
+            raise
+
     def _get_torrent_by_hash(self, info_hash: str) -> TransmissionTorrent:
-        torrents = self.client.get_torrents()
-        for torrent in torrents:
-            if torrent.hashString.lower() == info_hash.lower():
-                return torrent
-        raise ValueError(f"No torrent found with hash {info_hash}")
+        try:
+            torrents = self.client.get_torrents()
+            for torrent in torrents:
+                if torrent.hashString.lower() == info_hash.lower():
+                    return torrent
+            raise ValueError(f"No torrent found with hash {info_hash}")
+        except ValueError:
+            raise
+        except (TransmissionError, socket.gaierror, socket.timeout,
+                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "_get_torrent_by_hash")
 
     def check_connection(self) -> bool:
         """Test if the connection to Transmission is working."""
         try:
             self.client.session_stats()
             return True
+        except (TransmissionError, socket.gaierror, socket.timeout,
+                ConnectionRefusedError, ConnectionResetError) as e:
+            try:
+                self._handle_network_error(e, "check_connection")
+            except ConnectionError as ce:
+                logger.error(str(ce))
+                return False
         except Exception as e:
             logger.error(f"Failed to connect to Transmission at {self.host}:{self.port}: {e}")
             return False
@@ -101,10 +196,14 @@ class TransmissionClient(BaseTorrentClient):
             params['labels'] = labels
 
         # Add torrent
-        with open(path, "rb") as f:
-            torrent_data = f.read()
+        try:
+            with open(path, "rb") as f:
+                torrent_data = f.read()
 
-        torrent = self.client.add_torrent(torrent_data, **params)
+            torrent = self.client.add_torrent(torrent_data, **params)
+        except (TransmissionError, socket.gaierror, socket.timeout,
+                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "add_torrent")
 
         return torrent is not None
 
@@ -115,8 +214,10 @@ class TransmissionClient(BaseTorrentClient):
         IP must be registered with the tracker, or use file upload instead.
         """
         path = self._download_torrent_file(url)
-        result = self.add_torrent(path, start, priority, labels=labels)
-        os.remove(path)
+        try:
+            result = self.add_torrent(path, start, priority, labels=labels)
+        finally:
+            os.remove(path)
         return result
 
     def add_magnet(self, uri, start=True, labels: Optional[List[str]] = None):
@@ -124,7 +225,12 @@ class TransmissionClient(BaseTorrentClient):
         if labels:
             params['labels'] = labels
 
-        torrent = self.client.add_torrent(uri, **params)
+        try:
+            torrent = self.client.add_torrent(uri, **params)
+        except (TransmissionError, socket.gaierror, socket.timeout,
+                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "add_magnet")
+
         if not torrent:
             return False
 
@@ -135,7 +241,10 @@ class TransmissionClient(BaseTorrentClient):
             torrent = self._get_torrent_by_hash(info_hash)
             return self.client.stop_torrent(torrent.id)
         except ValueError:
-            raise ValueError(f"No torrent found with hash {info_hash}")
+            raise
+        except (TransmissionError, socket.gaierror, socket.timeout,
+                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "stop")
         except Exception as e:
             if 'info-hash not found' in str(e).lower():
                 raise ValueError(f"No torrent found with hash {info_hash}")
@@ -150,7 +259,10 @@ class TransmissionClient(BaseTorrentClient):
             torrent = self._get_torrent_by_hash(info_hash)
             return self.client.start_torrent(torrent.id)
         except ValueError:
-            raise ValueError(f"No torrent found with hash {info_hash}")
+            raise
+        except (TransmissionError, socket.gaierror, socket.timeout,
+                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "start")
         except Exception as e:
             if 'info-hash not found' in str(e).lower():
                 raise ValueError(f"No torrent found with hash {info_hash}")
@@ -165,7 +277,10 @@ class TransmissionClient(BaseTorrentClient):
             torrent = self._get_torrent_by_hash(info_hash)
             return self.client.remove_torrent(torrent.id, delete_data=delete_data)
         except ValueError:
-            raise ValueError(f"No torrent found with hash {info_hash}")
+            raise
+        except (TransmissionError, socket.gaierror, socket.timeout,
+                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "erase")
         except Exception as e:
             if 'info-hash not found' in str(e).lower():
                 raise ValueError(f"No torrent found with hash {info_hash}")
@@ -184,16 +299,24 @@ class TransmissionClient(BaseTorrentClient):
         return torrent.download_dir
 
     def list_all_info_hashes(self):
-        return [torrent.hashString for torrent in self.client.get_torrents()]
+        try:
+            return [torrent.hashString for torrent in self.client.get_torrents()]
+        except (TransmissionError, socket.gaierror, socket.timeout,
+                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "list_all_info_hashes")
 
     def list_torrents(self, info_hash=None, files=False) -> Generator[Dict[str, Any], None, None]:
-        if info_hash:
-            try:
-                torrents = [self._get_torrent_by_hash(info_hash)]
-            except ValueError:
-                return
-        else:
-            torrents = self.client.get_torrents()
+        try:
+            if info_hash:
+                try:
+                    torrents = [self._get_torrent_by_hash(info_hash)]
+                except ValueError:
+                    return
+            else:
+                torrents = self.client.get_torrents()
+        except (TransmissionError, socket.gaierror, socket.timeout,
+                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "list_torrents")
 
         for torrent in torrents:
             item = {
@@ -390,6 +513,9 @@ class TransmissionClient(BaseTorrentClient):
             if labels is None:
                 return []
             return list(labels)
+        except (TransmissionError, socket.gaierror, socket.timeout,
+                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "get_labels")
         except Exception as e:
             logger.error(f"Failed to get labels for {info_hash}: {e}")
             return []
@@ -404,6 +530,9 @@ class TransmissionClient(BaseTorrentClient):
             torrent = self._get_torrent_by_hash(info_hash)
             self.client.change_torrent(torrent.id, labels=labels)
             return True
+        except (TransmissionError, socket.gaierror, socket.timeout,
+                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            self._handle_network_error(e, "set_labels")
         except Exception as e:
             logger.error(f"Failed to set labels for {info_hash}: {e}")
             return False

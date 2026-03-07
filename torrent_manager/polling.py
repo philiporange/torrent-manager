@@ -15,7 +15,13 @@ and trigger auto-download via the TransferService.
 
 Error handling includes tracking consecutive failures and reducing log noise
 for persistent connection issues. Errors are logged immediately on first failure,
-at 5 consecutive failures, and then every 10 minutes for ongoing issues.
+at 10 consecutive failures, and then every 30 minutes for ongoing issues.
+
+Circuit breaker pattern is implemented: after 5 consecutive failures, a server is
+temporarily skipped to avoid repeated timeout delays. DNS failures, network unreachable
+errors, and malformed XML-RPC responses (indicating the server is likely offline or
+misconfigured) trigger a 30-minute cooldown, while other connection errors trigger a
+5-minute cooldown. The server is automatically retried after the cooldown period.
 """
 
 import asyncio
@@ -45,6 +51,8 @@ class ServerCache:
     completed_hashes: set = field(default_factory=set)
     # Temporarily store newly completed torrents for transfer triggering
     newly_completed: List[Dict[str, Any]] = field(default_factory=list)
+    # Circuit breaker: skip server temporarily after too many failures
+    skip_until: float = 0.0  # Timestamp when we can retry this server
 
 
 class TorrentPoller:
@@ -67,13 +75,25 @@ class TorrentPoller:
 
         Returns a ServerCache with the poll results, including any newly
         completed torrents detected since the last poll.
+
+        Implements circuit breaker pattern: after 5 consecutive failures, skip polling
+        for an extended period to reduce unnecessary timeouts. DNS failures, network
+        unreachable errors, and malformed XML-RPC responses trigger a 30-minute cooldown
+        (server likely offline or misconfigured), while other errors trigger a 5-minute cooldown.
         """
         cache = ServerCache(last_poll=time.time())
         old_cache = self._cache.get(server.id)
         old_completed = old_cache.completed_hashes if old_cache else set()
 
+        # Circuit breaker: skip if in cooldown period
+        if old_cache and old_cache.skip_until > time.time():
+            logger.debug(f"Skipping server {server.name} (in cooldown until {time.ctime(old_cache.skip_until)})")
+            # Return old cache data but update last_poll
+            old_cache.last_poll = cache.last_poll
+            return old_cache
+
         try:
-            client = get_client(server)
+            client = get_client(server, timeout=Config.MONITOR_TIMEOUT)
             torrents = list(client.list_torrents())
 
             has_active_downloads = False
@@ -107,6 +127,7 @@ class TorrentPoller:
             cache.error = None
             cache.consecutive_errors = 0
             cache.last_error_logged = 0.0
+            cache.skip_until = 0.0  # Clear circuit breaker on success
 
         except Exception as e:
             cache.error = str(e)
@@ -118,21 +139,52 @@ class TorrentPoller:
                 cache.completed_hashes = old_cache.completed_hashes
                 cache.consecutive_errors = old_cache.consecutive_errors + 1
                 cache.last_error_logged = old_cache.last_error_logged
+                cache.skip_until = old_cache.skip_until
             else:
                 cache.consecutive_errors = 1
 
+            # Circuit breaker: after 5 consecutive failures, skip for extended period
+            # DNS failures, network unreachable, and malformed XML-RPC responses get longer cooldown (30 min)
+            # as they indicate persistent issues (server down or misconfigured)
+            # Other failures get shorter cooldown (5 min) as they may be transient
+            if cache.consecutive_errors >= 5:
+                is_persistent_error = (
+                    "DNS resolution failed" in cache.error or
+                    "Name or service not known" in cache.error or
+                    "Network unreachable" in cache.error or
+                    "Malformed XML-RPC response" in cache.error
+                )
+                cooldown_minutes = 30 if is_persistent_error else 5
+                cache.skip_until = time.time() + (cooldown_minutes * 60)
+                if cache.consecutive_errors == 5:
+                    error_type = (
+                        'DNS/network failure - likely offline' if is_persistent_error
+                        else 'connection issue'
+                    )
+                    logger.warning(
+                        f"Server {server.name} has failed {cache.consecutive_errors} times consecutively. "
+                        f"Enabling circuit breaker: will skip polling for {cooldown_minutes} minutes "
+                        f"({error_type})."
+                    )
+
             # Log errors with reduced frequency for persistent failures
-            # Log first error immediately, then every 10 minutes for persistent failures
+            # Log first error immediately, then at 10 consecutive failures, then every 30 minutes
             current_time = time.time()
             should_log = (
                 cache.consecutive_errors == 1 or
-                cache.consecutive_errors == 5 or  # Log at 5 consecutive failures
-                (current_time - cache.last_error_logged) >= 600  # Log every 10 minutes
+                cache.consecutive_errors == 10 or  # Log at 10 consecutive failures
+                (current_time - cache.last_error_logged) >= 1800  # Log every 30 minutes
             )
 
             if should_log:
                 if cache.consecutive_errors == 1:
                     logger.error(f"Failed to poll server {server.name}: {cache.error}")
+                elif cache.consecutive_errors >= 10:
+                    logger.error(
+                        f"Failed to poll server {server.name} "
+                        f"({cache.consecutive_errors} consecutive failures): {cache.error}. "
+                        f"Consider disabling this server if it remains unreachable."
+                    )
                 else:
                     logger.error(
                         f"Failed to poll server {server.name} "
