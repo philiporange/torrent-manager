@@ -8,6 +8,10 @@ Rate limiting is applied between item processing to reduce tracker pressure, and
 HTTP 429 errors trigger exponential retry backoff so private trackers are not
 hammered after they begin rate limiting requests.
 
+Authentication errors (401 Unauthorized, 403 Forbidden) are treated as permanent
+failures and marked as "failed" status instead of retrying, since expired or invalid
+authentication tokens won't be fixed by retries.
+
 Database connection management ensures the SQLite connection is open before
 database operations. Query results are eagerly evaluated with list() to prevent
 lazy iteration errors when the connection is closed by other async tasks between
@@ -157,6 +161,11 @@ class RSSService:
         message = str(exc).lower()
         return "429" in message or "too many requests" in message
 
+    def _is_auth_error(self, exc: Exception) -> bool:
+        """Check if error is an authentication/authorization failure that won't be fixed by retrying."""
+        message = str(exc).lower()
+        return "401" in message or "403" in message or "unauthorized" in message or "forbidden" in message
+
     def _retry_delay_for(self, exc: Exception, attempt_count: int) -> int:
         if not self._is_rate_limited_error(exc):
             return Config.RSS_RETRY_DELAY
@@ -263,10 +272,18 @@ class RSSService:
             except Exception as exc:
                 item.last_error = str(exc)
                 item.attempt_count += 1
-                delay_seconds = self._retry_delay_for(exc, item.attempt_count)
-                item.next_attempt_at = now + datetime.timedelta(seconds=delay_seconds)
-                item.save()
-                logger.error(f"Failed to add RSS item {item.title}: {exc}")
+
+                if self._is_auth_error(exc):
+                    item.status = "failed"
+                    item.save()
+                    logger.warning(
+                        f"RSS item {item.title} failed with authentication error (not retrying): {exc}"
+                    )
+                else:
+                    delay_seconds = self._retry_delay_for(exc, item.attempt_count)
+                    item.next_attempt_at = now + datetime.timedelta(seconds=delay_seconds)
+                    item.save()
+                    logger.error(f"Failed to add RSS item {item.title}: {exc}")
 
     async def run(self) -> None:
         """Main RSS polling loop."""
