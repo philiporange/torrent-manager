@@ -226,3 +226,49 @@ async def test_rss_service_uses_exponential_backoff_for_429(test_user):
     assert item.attempt_count == 2
     expected = min(Config.RSS_429_BACKOFF_BASE * Config.RSS_429_BACKOFF_MULTIPLIER, Config.RSS_429_BACKOFF_MAX)
     assert expected - 5 <= second_delay <= expected + 5
+
+
+@pytest.mark.asyncio
+async def test_rss_service_marks_auth_errors_as_failed(test_user):
+    """Test that authentication errors (401, 403) are marked as failed instead of retried."""
+    server = TorrentServer.create(
+        id='server_auth',
+        user_id=test_user.id,
+        name='Auth Server',
+        server_type='transmission',
+        host='localhost',
+        port=9091,
+    )
+    RSSFeed.create(
+        id='feed_auth',
+        user_id=test_user.id,
+        server_id=server.id,
+        name='Feed',
+        url='https://example.com/rss.xml',
+        delay_hours=0,
+        enabled=True,
+    )
+    item = RSSFeedItem.create(
+        id='item_auth',
+        feed_id='feed_auth',
+        user_id=test_user.id,
+        server_id=server.id,
+        title='Auth failed item',
+        guid='item_auth',
+        link='https://example.com/file.torrent',
+        uri='https://example.com/file.torrent',
+        fingerprint='item_auth',
+        status='pending',
+        detected_at=datetime.datetime.now() - datetime.timedelta(hours=1),
+        next_attempt_at=datetime.datetime.now() - datetime.timedelta(minutes=1),
+    )
+
+    service = RSSService()
+
+    with patch('torrent_manager.rss.add_torrent_to_server', side_effect=Exception('401 Client Error: Unauthorized')):
+        await service.process_pending_items()
+
+    item = RSSFeedItem.get_by_id(item.id)
+    assert item.status == 'failed'
+    assert item.attempt_count == 1
+    assert '401' in item.last_error
