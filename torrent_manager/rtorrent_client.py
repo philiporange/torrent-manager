@@ -253,13 +253,13 @@ class RTorrentClient(BaseTorrentClient):
 
         return result == 0
 
-    def add_torrent_url(self, url, start=True, priority=1, labels: Optional[List[str]] = None):
+    def add_torrent_url(self, url, start=True, priority=1, labels: Optional[List[str]] = None, user_id: Optional[str] = None):
         """Add a torrent from a URL by downloading the .torrent file first.
 
         Note: For private trackers that validate IP addresses, the torrent server's
         IP must be registered with the tracker, or use file upload instead.
         """
-        path = self._download_torrent_file(url)
+        path = self._download_torrent_file(url, user_id=user_id)
         try:
             tf = TorrentFile(path)
         except InvalidTorrentFileError as e:
@@ -626,9 +626,9 @@ class RTorrentClient(BaseTorrentClient):
         for file_index, priority in priorities:
             self.set_file_priority(info_hash, file_index, priority)
 
-    def _download_torrent_file(self, url):
+    def _download_torrent_file(self, url, user_id: Optional[str] = None):
         """Download a .torrent file from a URL to a temporary file."""
-        response = rate_limited_get(url)
+        response = rate_limited_get(url, user_id=user_id)
         response.raise_for_status()
 
         temp_dir = tempfile.gettempdir()

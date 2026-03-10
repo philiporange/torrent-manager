@@ -4,12 +4,18 @@ Includes local data move helpers plus a simple per-host HTTP rate limiter for
 fetching remote `.torrent` files from tracker download endpoints. The limiter is
 process-local and ensures repeated URL fetches do not exceed the configured
 minimum interval between requests to the same host.
+
+User-specific cookies and headers can be configured per user for tracker
+authentication when downloading .torrent files from private trackers that
+require session cookies or API keys in headers.
 """
 
+import json
 import os
 import shutil
 import threading
 import time
+from typing import Optional
 from urllib.parse import urlparse
 
 import requests
@@ -110,8 +116,12 @@ def move_torrent(client, info_hash, new_location):
         return False
 
 
-def rate_limited_get(url: str, *, min_interval_seconds: int | None = None, timeout: int | None = None, **kwargs):
-    """Fetch a URL while enforcing a minimum interval between requests to the same host."""
+def rate_limited_get(url: str, *, min_interval_seconds: int | None = None, timeout: int | None = None, user_id: Optional[str] = None, **kwargs):
+    """Fetch a URL while enforcing a minimum interval between requests to the same host.
+
+    If user_id is provided, loads user-specific cookies and headers from the database
+    for tracker authentication.
+    """
     interval = Config.TORRENT_URL_MIN_INTERVAL if min_interval_seconds is None else min_interval_seconds
     timeout = Config.CLIENT_TIMEOUT if timeout is None else timeout
     parsed = urlparse(url)
@@ -128,5 +138,38 @@ def rate_limited_get(url: str, *, min_interval_seconds: int | None = None, timeo
         if wait_time > 0:
             logger.debug(f"Rate limiting torrent URL fetch for {host_key}; sleeping {wait_time:.2f}s")
             time.sleep(wait_time)
+
+    if user_id:
+        from .models import User
+        from .dbs import sdb as db
+
+        try:
+            if db.is_closed():
+                db.connect(reuse_if_open=True)
+
+            user = User.get(User.id == user_id)
+
+            if user.download_cookies:
+                try:
+                    cookies = json.loads(user.download_cookies)
+                    if 'cookies' not in kwargs:
+                        kwargs['cookies'] = {}
+                    kwargs['cookies'].update(cookies)
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.warning(f"Failed to parse download_cookies for user {user_id}: {e}")
+
+            if user.download_headers:
+                try:
+                    headers = json.loads(user.download_headers)
+                    if 'headers' not in kwargs:
+                        kwargs['headers'] = {}
+                    kwargs['headers'].update(headers)
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.warning(f"Failed to parse download_headers for user {user_id}: {e}")
+
+        except User.DoesNotExist:
+            logger.warning(f"User {user_id} not found for download authentication")
+        except Exception as e:
+            logger.warning(f"Failed to load user download credentials: {e}")
 
     return requests.get(url, timeout=timeout, **kwargs)

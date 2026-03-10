@@ -24,6 +24,8 @@ class User(BaseModel):
     password = CharField()
     is_admin = BooleanField(default=False)
     timestamp = DateTimeField(default=datetime.datetime.now)
+    download_cookies = CharField(null=True)
+    download_headers = CharField(null=True)
 
 
 class TorrentServer(BaseModel):

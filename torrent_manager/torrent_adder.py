@@ -122,7 +122,7 @@ async def add_torrent_to_server(
                 normalized_uri = augment_magnet_with_trackers(normalized_uri)
                 added = client.add_magnet(normalized_uri, start=start, labels=labels)
         elif normalized_uri.startswith("http://") or normalized_uri.startswith("https://"):
-            added = client.add_torrent_url(normalized_uri, start=start, labels=labels)
+            added = client.add_torrent_url(normalized_uri, start=start, labels=labels, user_id=user_id)
         else:
             raise ValueError("Input must be an info hash, magnet link, or HTTP/HTTPS URL")
 

@@ -52,7 +52,7 @@ class BaseTorrentClient(ABC):
         pass
 
     @abstractmethod
-    def add_torrent_url(self, url: str, start: bool = True, labels: Optional[List[str]] = None) -> bool:
+    def add_torrent_url(self, url: str, start: bool = True, labels: Optional[List[str]] = None, user_id: Optional[str] = None) -> bool:
         """
         Add a torrent from a URL to a .torrent file.
 
@@ -60,6 +60,7 @@ class BaseTorrentClient(ABC):
             url: HTTP/HTTPS URL to a .torrent file
             start: Whether to start the torrent immediately
             labels: Optional list of labels to set on the torrent
+            user_id: Optional user ID for loading user-specific download authentication
 
         Returns:
             True if successful
