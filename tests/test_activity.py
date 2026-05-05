@@ -24,7 +24,7 @@ class TestActivity(unittest.TestCase):
         os.unlink(cls.temp_db.name)
 
     def setUp(self):
-        self.activity = Activity(self.temp_db.name)
+        self.activity = Activity()
         Status.delete().execute()  # Clear the database before each test
 
     def tearDown(self):
@@ -57,7 +57,7 @@ class TestActivity(unittest.TestCase):
     def test_calculate_seeding_duration_with_gaps(self):
         info_hash = "test_hash"
         start_time = datetime.datetime.now() - datetime.timedelta(minutes=35)
-        
+
         # Record seeding with gaps
         self.activity.record_torrent_status(info_hash, timestamp=start_time)
         self.activity.record_torrent_status(info_hash, timestamp=start_time + datetime.timedelta(minutes=1))
@@ -65,7 +65,9 @@ class TestActivity(unittest.TestCase):
         # Gap
         self.activity.record_torrent_status(info_hash, timestamp=start_time + datetime.timedelta(minutes=32))
         self.activity.record_torrent_status(info_hash, timestamp=start_time + datetime.timedelta(minutes=33))
-                
+        # Stop seeding to prevent counting time to now
+        self.activity.record_torrent_status(info_hash, is_seeding=False, timestamp=start_time + datetime.timedelta(minutes=34))
+
         duration = self.activity.calculate_seeding_duration(info_hash)
         expected_duration = 3 * 60  # 3 minutes * 60 seconds
         self.assertAlmostEqual(duration, expected_duration, delta=5)

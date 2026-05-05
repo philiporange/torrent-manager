@@ -33,3 +33,14 @@ def test_load_with_target_fallback_retries_blank_target_after_invalid_view():
     assert result == 0
     assert proxy.load.raw_start.call_args_list[0].args == ('main', b'data')
     assert proxy.load.raw_start.call_args_list[1].args == ('', b'data')
+
+
+def test_load_with_target_fallback_retries_blank_target_after_unsupported_target():
+    rtorrent, proxy = make_client()
+    proxy.load.raw_start.side_effect = [client.Fault(-501, 'Unsupported target type found.'), 0]
+
+    result = rtorrent._load_with_target_fallback('raw_start', b'data')
+
+    assert result == 0
+    assert proxy.load.raw_start.call_args_list[0].args == ('main', b'data')
+    assert proxy.load.raw_start.call_args_list[1].args == ('', b'data')

@@ -1,3 +1,4 @@
+import json
 import pytest
 import os
 import time
@@ -259,6 +260,30 @@ class TestTransmissionClientErrorHandling:
         error_msg = str(exc_info.value)
         assert "Network unreachable" in error_msg
         assert "example.com:9091" in error_msg
+
+    @patch('torrent_manager.transmission_client.TransmissionRPCClient')
+    def test_json_decode_error_handling(self, mock_rpc_client):
+        """Test that json.JSONDecodeError is properly handled."""
+        # Mock the RPC client to avoid actual connection
+        mock_rpc_client.return_value = Mock()
+
+        client = TransmissionClient(
+            protocol="http",
+            host="example.com",
+            port=9091,
+            timeout=10
+        )
+
+        # Test json.JSONDecodeError (happens when server returns HTML instead of JSON)
+        mock_json_error = json.JSONDecodeError("Expecting value", "<html>...</html>", 0)
+
+        with pytest.raises(ConnectionError) as exc_info:
+            client._handle_network_error(mock_json_error, "test_operation")
+
+        error_msg = str(exc_info.value)
+        assert "Invalid RPC endpoint" in error_msg
+        assert "example.com:9091" in error_msg
+        assert "check rpc_path configuration" in error_msg
 
 
 if __name__ == '__main__':

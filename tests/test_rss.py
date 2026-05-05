@@ -230,7 +230,7 @@ async def test_rss_service_uses_exponential_backoff_for_429(test_user):
 
 @pytest.mark.asyncio
 async def test_rss_service_marks_auth_errors_as_failed(test_user):
-    """Test that authentication errors (401, 403) are marked as failed instead of retried."""
+    """Test that permanent errors (401, 403, 404) are marked as failed instead of retried."""
     server = TorrentServer.create(
         id='server_auth',
         user_id=test_user.id,

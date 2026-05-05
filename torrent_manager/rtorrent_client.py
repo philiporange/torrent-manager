@@ -23,6 +23,12 @@ Error handling includes:
 - All client methods that make network calls wrap socket-level and XML-RPC errors
   to provide consistent error messages across the API.
 
+Target fallback handling for torrent load operations:
+- When adding torrents, the client first tries the configured view (default "main")
+- If that fails with any target-related error (e.g., "invalid target", "unsupported target",
+  "unsupported target type found"), it retries with an empty string target for compatibility
+  with different rTorrent configurations
+
 Labels are stored in d.custom1 (ruTorrent compatible) as comma-separated values.
 
 The list_torrents() method uses d.multicall2 to efficiently fetch torrent data from
@@ -194,7 +200,8 @@ class RTorrentClient(BaseTorrentClient):
             try:
                 return method(target, payload)
             except client.Fault as e:
-                if "invalid target" in e.faultString.lower():
+                error_msg = e.faultString.lower()
+                if "target" in error_msg and ("invalid" in error_msg or "unsupported" in error_msg):
                     last_fault = e
                     continue
                 raise

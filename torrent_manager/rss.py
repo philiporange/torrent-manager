@@ -8,9 +8,11 @@ Rate limiting is applied between item processing to reduce tracker pressure, and
 HTTP 429 errors trigger exponential retry backoff so private trackers are not
 hammered after they begin rate limiting requests.
 
-Authentication errors (401 Unauthorized, 403 Forbidden) are treated as permanent
-failures and marked as "failed" status instead of retrying, since expired or invalid
-authentication tokens won't be fixed by retries.
+Permanent errors (401/403 authentication failures, 404 missing resources) are
+marked as "failed" status instead of retrying, since expired tokens, removed
+torrents, or invalid URLs won't be fixed by retries. The error type (authentication
+vs resource) is logged to help distinguish between credential issues and missing
+content.
 
 Database connection management ensures the SQLite connection is open before
 database operations. Query results are eagerly evaluated with list() to prevent
@@ -161,10 +163,10 @@ class RSSService:
         message = str(exc).lower()
         return "429" in message or "too many requests" in message
 
-    def _is_auth_error(self, exc: Exception) -> bool:
-        """Check if error is an authentication/authorization failure that won't be fixed by retrying."""
+    def _is_permanent_error(self, exc: Exception) -> bool:
+        """Check if error is permanent (auth failure, missing resource, etc) that won't be fixed by retrying."""
         message = str(exc).lower()
-        return "401" in message or "403" in message or "unauthorized" in message or "forbidden" in message
+        return "401" in message or "403" in message or "404" in message or "unauthorized" in message or "forbidden" in message or "not found" in message
 
     def _retry_delay_for(self, exc: Exception, attempt_count: int) -> int:
         if not self._is_rate_limited_error(exc):
@@ -273,11 +275,12 @@ class RSSService:
                 item.last_error = str(exc)
                 item.attempt_count += 1
 
-                if self._is_auth_error(exc):
+                if self._is_permanent_error(exc):
                     item.status = "failed"
                     item.save()
+                    error_type = "authentication" if any(x in str(exc).lower() for x in ["401", "403", "unauthorized", "forbidden"]) else "resource"
                     logger.warning(
-                        f"RSS item {item.title} failed with authentication error (not retrying): {exc}"
+                        f"RSS item {item.title} failed with {error_type} error (not retrying): {exc}"
                     )
                 else:
                     delay_seconds = self._retry_delay_for(exc, item.attempt_count)

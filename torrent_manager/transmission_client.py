@@ -19,15 +19,17 @@ Network unreachable errors (errno 101) are specifically detected in Transmission
 exceptions and converted to ConnectionError with "Network unreachable" in the message,
 enabling the polling service to activate the circuit breaker pattern with extended cooldown.
 
-JSON parsing errors (when server returns HTML instead of JSON, typically due to 404
-or other HTTP errors) are detected and converted to ConnectionError with a message
-indicating invalid RPC endpoint configuration. This typically indicates the rpc_path
-is incorrect for the server.
+JSON parsing errors (json.JSONDecodeError) are caught in all RPC operations and converted
+to ConnectionError with a message indicating invalid RPC endpoint configuration. These errors
+occur when the server returns HTML instead of JSON, typically due to incorrect rpc_path
+configuration (e.g., 404 errors, authentication pages). This prevents uncaught exceptions
+from propagating to the polling service and ensures proper error logging.
 
 Requires transmission_rpc >= 7.0 which uses get_files() and file_count property.
 Labels are stored using Transmission's native labels field (requires Transmission >= 3.0).
 """
 
+import json
 import os
 import socket
 import tempfile
@@ -86,7 +88,7 @@ class TransmissionClient(BaseTorrentClient):
                 timeout=timeout
             )
         except (TransmissionError, socket.gaierror, socket.timeout,
-                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+                ConnectionRefusedError, ConnectionResetError, OSError, json.JSONDecodeError) as e:
             socket.setdefaulttimeout(old_timeout)
             self._handle_network_error(e, "connect")
         finally:
@@ -98,8 +100,11 @@ class TransmissionClient(BaseTorrentClient):
         underlying = e.__cause__ or e.__context__ or e
         underlying_msg = str(underlying)
 
+        # Handle JSON decode errors (server returning HTML instead of JSON)
+        if isinstance(e, json.JSONDecodeError):
+            raise ConnectionError(f"Invalid RPC endpoint for {self.host}:{self.port} - server returned non-JSON response (check rpc_path configuration)") from e
         # Handle transmission_rpc specific errors
-        if isinstance(e, TransmissionTimeoutError):
+        elif isinstance(e, TransmissionTimeoutError):
             raise ConnectionError(f"Connection timeout to {self.host}:{self.port}") from e
         elif isinstance(e, TransmissionConnectError):
             # TransmissionConnectError may wrap DNS errors or connection refused
@@ -158,7 +163,7 @@ class TransmissionClient(BaseTorrentClient):
         except ValueError:
             raise
         except (TransmissionError, socket.gaierror, socket.timeout,
-                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+                ConnectionRefusedError, ConnectionResetError, OSError, json.JSONDecodeError) as e:
             self._handle_network_error(e, "_get_torrent_by_hash")
 
     def check_connection(self) -> bool:
@@ -167,7 +172,7 @@ class TransmissionClient(BaseTorrentClient):
             self.client.session_stats()
             return True
         except (TransmissionError, socket.gaierror, socket.timeout,
-                ConnectionRefusedError, ConnectionResetError) as e:
+                ConnectionRefusedError, ConnectionResetError, json.JSONDecodeError) as e:
             try:
                 self._handle_network_error(e, "check_connection")
             except ConnectionError as ce:
@@ -203,7 +208,7 @@ class TransmissionClient(BaseTorrentClient):
 
             torrent = self.client.add_torrent(torrent_data, **params)
         except (TransmissionError, socket.gaierror, socket.timeout,
-                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+                ConnectionRefusedError, ConnectionResetError, OSError, json.JSONDecodeError) as e:
             self._handle_network_error(e, "add_torrent")
 
         return torrent is not None
@@ -229,7 +234,7 @@ class TransmissionClient(BaseTorrentClient):
         try:
             torrent = self.client.add_torrent(uri, **params)
         except (TransmissionError, socket.gaierror, socket.timeout,
-                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+                ConnectionRefusedError, ConnectionResetError, OSError, json.JSONDecodeError) as e:
             self._handle_network_error(e, "add_magnet")
 
         if not torrent:
@@ -244,7 +249,7 @@ class TransmissionClient(BaseTorrentClient):
         except ValueError:
             raise
         except (TransmissionError, socket.gaierror, socket.timeout,
-                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+                ConnectionRefusedError, ConnectionResetError, OSError, json.JSONDecodeError) as e:
             self._handle_network_error(e, "stop")
         except Exception as e:
             if 'info-hash not found' in str(e).lower():
@@ -262,7 +267,7 @@ class TransmissionClient(BaseTorrentClient):
         except ValueError:
             raise
         except (TransmissionError, socket.gaierror, socket.timeout,
-                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+                ConnectionRefusedError, ConnectionResetError, OSError, json.JSONDecodeError) as e:
             self._handle_network_error(e, "start")
         except Exception as e:
             if 'info-hash not found' in str(e).lower():
@@ -280,7 +285,7 @@ class TransmissionClient(BaseTorrentClient):
         except ValueError:
             raise
         except (TransmissionError, socket.gaierror, socket.timeout,
-                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+                ConnectionRefusedError, ConnectionResetError, OSError, json.JSONDecodeError) as e:
             self._handle_network_error(e, "erase")
         except Exception as e:
             if 'info-hash not found' in str(e).lower():
@@ -303,7 +308,7 @@ class TransmissionClient(BaseTorrentClient):
         try:
             return [torrent.hashString for torrent in self.client.get_torrents()]
         except (TransmissionError, socket.gaierror, socket.timeout,
-                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+                ConnectionRefusedError, ConnectionResetError, OSError, json.JSONDecodeError) as e:
             self._handle_network_error(e, "list_all_info_hashes")
 
     def list_torrents(self, info_hash=None, files=False) -> Generator[Dict[str, Any], None, None]:
@@ -316,7 +321,7 @@ class TransmissionClient(BaseTorrentClient):
             else:
                 torrents = self.client.get_torrents()
         except (TransmissionError, socket.gaierror, socket.timeout,
-                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+                ConnectionRefusedError, ConnectionResetError, OSError, json.JSONDecodeError) as e:
             self._handle_network_error(e, "list_torrents")
 
         for torrent in torrents:
@@ -515,7 +520,7 @@ class TransmissionClient(BaseTorrentClient):
                 return []
             return list(labels)
         except (TransmissionError, socket.gaierror, socket.timeout,
-                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+                ConnectionRefusedError, ConnectionResetError, OSError, json.JSONDecodeError) as e:
             self._handle_network_error(e, "get_labels")
         except Exception as e:
             logger.error(f"Failed to get labels for {info_hash}: {e}")
@@ -532,7 +537,7 @@ class TransmissionClient(BaseTorrentClient):
             self.client.change_torrent(torrent.id, labels=labels)
             return True
         except (TransmissionError, socket.gaierror, socket.timeout,
-                ConnectionRefusedError, ConnectionResetError, OSError) as e:
+                ConnectionRefusedError, ConnectionResetError, OSError, json.JSONDecodeError) as e:
             self._handle_network_error(e, "set_labels")
         except Exception as e:
             logger.error(f"Failed to set labels for {info_hash}: {e}")

@@ -7,7 +7,15 @@ minimum interval between requests to the same host.
 
 User-specific cookies and headers can be configured per user for tracker
 authentication when downloading .torrent files from private trackers that
-require session cookies or API keys in headers.
+require session cookies or API keys in headers. If a user_id is provided,
+user credentials are loaded from the database. If the user is not found or
+credentials are not configured, a warning is logged and the download proceeds
+without user-specific authentication. This allows graceful fallback for public
+trackers or URLs with embedded authentication tokens.
+
+Database connections opened for loading user credentials are properly closed
+to prevent connection leaks that could interfere with async database operations
+in other parts of the application.
 """
 
 import json
@@ -120,7 +128,8 @@ def rate_limited_get(url: str, *, min_interval_seconds: int | None = None, timeo
     """Fetch a URL while enforcing a minimum interval between requests to the same host.
 
     If user_id is provided, loads user-specific cookies and headers from the database
-    for tracker authentication.
+    for tracker authentication. If credentials are not found, the download proceeds
+    without user-specific authentication.
     """
     interval = Config.TORRENT_URL_MIN_INTERVAL if min_interval_seconds is None else min_interval_seconds
     timeout = Config.CLIENT_TIMEOUT if timeout is None else timeout
@@ -143,9 +152,11 @@ def rate_limited_get(url: str, *, min_interval_seconds: int | None = None, timeo
         from .models import User
         from .dbs import sdb as db
 
+        db_was_closed = False
         try:
             if db.is_closed():
                 db.connect(reuse_if_open=True)
+                db_was_closed = True
 
             user = User.get(User.id == user_id)
 
@@ -155,6 +166,7 @@ def rate_limited_get(url: str, *, min_interval_seconds: int | None = None, timeo
                     if 'cookies' not in kwargs:
                         kwargs['cookies'] = {}
                     kwargs['cookies'].update(cookies)
+                    logger.debug(f"Loaded download_cookies for user {user_id}")
                 except (json.JSONDecodeError, TypeError) as e:
                     logger.warning(f"Failed to parse download_cookies for user {user_id}: {e}")
 
@@ -164,12 +176,16 @@ def rate_limited_get(url: str, *, min_interval_seconds: int | None = None, timeo
                     if 'headers' not in kwargs:
                         kwargs['headers'] = {}
                     kwargs['headers'].update(headers)
+                    logger.debug(f"Loaded download_headers for user {user_id}")
                 except (json.JSONDecodeError, TypeError) as e:
                     logger.warning(f"Failed to parse download_headers for user {user_id}: {e}")
 
         except User.DoesNotExist:
-            logger.warning(f"User {user_id} not found for download authentication")
+            logger.warning(f"User {user_id} not found, proceeding without user-specific credentials")
         except Exception as e:
             logger.warning(f"Failed to load user download credentials: {e}")
+        finally:
+            if db_was_closed:
+                db.close()
 
     return requests.get(url, timeout=timeout, **kwargs)

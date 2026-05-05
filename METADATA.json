@@ -1,108 +1,112 @@
 {
   "name": "Torrent Manager",
-  "short_description": "A Python application for managing torrent client instances with a secure REST API and CLI.",
-  "long_description": "Torrent Manager is a comprehensive Python application that provides unified control over multiple torrent clients (rTorrent and Transmission) through both a REST API and command-line interface. It features a web-based frontend for browser-based management, secure session-based and API key authentication, torrent activity logging and tracking, automated maintenance tasks (moving completed torrents, pausing long-seeded torrents), and database management for users, torrents, and activity. The application supports both local and remote torrent server connections with HTTP-based file serving and optional local mount support.",
+  "short_description": "Python application for managing torrent clients (rTorrent, Transmission) via secure REST API with authentication, CLI, and web frontend.",
+  "long_description": "Torrent Manager is a comprehensive Python application that provides unified management of torrent client instances (rTorrent and Transmission) through a secure REST API, command-line interface, and web frontend. It automates common torrent operations including moving completed files, managing seeding duration, logging activity, and transferring downloaded content via rsync over SSH. The system features secure session-based and API key authentication, background polling services with circuit breaker error handling, automatic media identification and metadata retrieval from TMDB/IMDB, lifecycle callbacks for custom event handling, RSS feed automation, and HLS media streaming integration. Built on FastAPI with SQLite database via Peewee ORM, it offers both programmatic and interactive interfaces for torrent management.",
   "keywords": [
     "torrent",
+    "torrent-client",
     "rtorrent",
     "transmission",
-    "api",
-    "cli",
-    "fastapi",
     "rest-api",
-    "authentication",
-    "torrent-client",
-    "torrent-management",
-    "magnet-links",
-    "torrent-monitoring",
+    "fastapi",
+    "cli-tool",
     "web-frontend",
-    "seeding-management",
-    "downloader"
+    "authentication",
+    "api-keys",
+    "session-management",
+    "file-transfer",
+    "rsync",
+    "background-jobs",
+    "metadata-service",
+    "tmdb",
+    "imdb",
+    "jellyfin",
+    "media-identification",
+    "circuit-breaker",
+    "error-handling",
+    "polling-service",
+    "rss-feeds",
+    "media-streaming",
+    "hls",
+    "system-administration",
+    "automation"
   ],
   "primary_language": "Python",
   "languages": [
-    "Python"
+    "Python",
+    "JavaScript",
+    "HTML",
+    "CSS"
   ],
   "frameworks": [
     "FastAPI",
-    "Uvicorn",
     "Peewee",
-    "Pydantic"
+    "transmission_rpc",
+    "httpx",
+    "requests",
+    "docker",
+    "uvicorn"
   ],
   "modules": [
     {
       "path": "torrent_manager/api/main.py",
-      "description": "Main FastAPI application setup with CORS middleware, static file serving, authentication management, and background tasks for seeding monitoring."
-    },
-    {
-      "path": "torrent_manager/base_client.py",
-      "description": "Abstract base class defining the interface for torrent client implementations, allowing RTorrentClient and TransmissionClient to be used interchangeably."
-    },
-    {
-      "path": "torrent_manager/client_factory.py",
-      "description": "Factory for creating appropriate torrent client instances (RTorrentClient or TransmissionClient) based on server configuration."
+      "description": "FastAPI application entry point with background services (seeding monitor, torrent poller, transfer service, media streaming worker)."
     },
     {
       "path": "torrent_manager/rtorrent_client.py",
-      "description": "Implementation of the rTorrent client connector using XML-RPC protocol for torrent operations."
+      "description": "RTorrent XMLRPC client with error handling, target fallback, and comprehensive timeout support for rTorrent servers."
     },
     {
       "path": "torrent_manager/transmission_client.py",
-      "description": "Implementation of the Transmission client connector using Transmission RPC protocol for torrent operations."
+      "description": "Transmission RPC client implementing the same interface as RTorrentClient for transparent interchangeable use."
+    },
+    {
+      "path": "torrent_manager/base_client.py",
+      "description": "Abstract base class defining the common torrent client interface for rTorrent and Transmission implementations."
     },
     {
       "path": "torrent_manager/auth.py",
-      "description": "Session-based authentication with sliding expiration windows, remember-me tokens, API key management, and bcrypt password hashing."
+      "description": "Session-based and API key authentication system with sliding expiration, remember-me tokens, and bcrypt password hashing."
+    },
+    {
+      "path": "torrent_manager/polling.py",
+      "description": "Background polling service that fetches torrent status from servers with circuit breaker error handling and intelligent interval adjustment."
+    },
+    {
+      "path": "torrent_manager/transfer.py",
+      "description": "Transfer service managing rsync-based file downloads from remote servers with retry logic, progress parsing, and auto-deletion support."
+    },
+    {
+      "path": "torrent_manager/metadata_service.py",
+      "description": "Automatic media identification service using torrent_match and media_metadata for TMDB/IMDB metadata retrieval and Jellyfin NFO generation."
+    },
+    {
+      "path": "torrent_manager/callbacks.py",
+      "description": "Torrent lifecycle callback system allowing custom Python scripts to respond to events (added, started, stopped, completed, removed, error, transfer_*)"
     },
     {
       "path": "torrent_manager/models.py",
-      "description": "Peewee database models for users, sessions, API keys, torrent servers, torrents, status tracking, and activity logging."
-    },
-    {
-      "path": "torrent_manager/torrent_file.py",
-      "description": "Torrent file parser for extracting metadata, generating info hashes, creating magnet links, and managing tracker lists."
-    },
-    {
-      "path": "torrent_manager/magnet_link.py",
-      "description": "Magnet link parser and reconstructor for extracting and reconstructing magnet URIs with info hash, name, trackers, and size."
-    },
-    {
-      "path": "torrent_manager/activity.py",
-      "description": "Activity tracking and logging system for recording torrent status, seeding duration, and other torrent events."
+      "description": "Peewee database models for users, sessions, servers, torrents, transfers, metadata, and RSS feeds."
     },
     {
       "path": "torrent_manager/api/routes/torrents.py",
-      "description": "FastAPI routes for torrent management operations including listing, adding, starting, stopping, and removing torrents."
+      "description": "REST API endpoints for torrent operations: list, add, start, stop, remove, and metadata management."
     },
     {
       "path": "torrent_manager/api/routes/auth.py",
-      "description": "FastAPI routes for authentication endpoints including login, registration, logout, and API key management."
-    },
-    {
-      "path": "torrent_manager/api/routes/servers.py",
-      "description": "FastAPI routes for torrent server management including configuration, testing connections, and server listing."
+      "description": "REST API endpoints for user registration, login, logout, session management, and API key creation/revocation."
     },
     {
       "path": "torrent_manager/cli.py",
-      "description": "Command-line interface providing terminal access to API functionality with session persistence and user authentication."
+      "description": "Command-line interface providing terminal access to all API functionality for user authentication, server management, and torrent operations."
     },
     {
-      "path": "torrent_manager/config.py",
-      "description": "Configuration management with environment variable support, defaults for logging, database paths, seeding durations, and polling intervals."
+      "path": "torrent_manager/server.py",
+      "description": "Server startup and configuration with environment variable handling, database initialization, and background service startup."
+    },
+    {
+      "path": "torrent_manager/rss.py",
+      "description": "RSS feed automation service for monitoring feeds and automatically adding torrents matching configured rules."
     }
-  ],
-  "git": {
-    "is_repo": true,
-    "remote_url": "https://github.com/philiporange/torrent-manager.git",
-    "github_name": "philiporange/torrent-manager",
-    "default_branch": "master",
-    "last_commit": "2025-12-06T05:17:14+00:00"
-  },
-  "stats": {
-    "files": 78,
-    "lines_of_code": 11321,
-    "size_bytes": 5602905
-  },
-  "generated_at": "2025-12-06T19:39:40.384258",
-  "generator_version": "1.0.0"
+  ]
 }

@@ -9,25 +9,30 @@ Transfer flow:
 1. TorrentPoller detects completion -> calls queue_transfer()
 2. TransferJob created in database with status "pending"
 3. Background loop picks up pending jobs
-4. rsync dry-run to check if transfer needed -> skip if already complete
+4. rsync dry-run to check if transfer needed -> skip if already complete and check auto-delete
 5. rsync subprocess executed, progress parsed and saved to DB
 6. On success: mark "completed", check for auto-delete
 7. On failure: retry up to max_retries, then mark "failed"
 
 Auto-delete flow (seeding-aware):
 1. Transfer completes, job.auto_delete_after=True
-2. Check if torrent is still actively seeding (complete AND active)
-3. If seeding: defer deletion, job.remote_deleted remains False
-4. process_pending_deletions() periodically rechecks deferred deletions
-5. When seeding stops: delete torrent/files, set job.remote_deleted=True
+2. Check if torrent has met its seeding threshold (PRIVATE/PUBLIC_SEED_DURATION)
+3. If threshold met OR torrent stopped: delete remote torrent and files
+4. If still seeding below threshold: defer deletion until threshold met
+5. process_pending_deletions() periodically rechecks deferred deletions
 
 Error handling:
-- Respects poller's circuit breaker: skips deletion checks when server is unreachable
+- Respects poller's circuit breaker: skips deletion checks when circuit breaker is engaged
+- Groups pending deletions by server to check health once per server, preventing log spam
+  when multiple torrents are queued for deletion on an unreachable server
 - Uses reduced timeout (10s) for deletion checks to prevent blocking
 - Implements reduced-frequency logging for persistent server connection failures
+- Distinguishes between temporary network errors and permanent errors
+- Network errors (ConnectionError, ProtocolError for HTTP errors like 502 Bad Gateway,
+  connection refused, network unreachable, timeout, DNS failure) are retried
+  indefinitely without counting toward the failure limit
+- Non-network errors count toward the 20-failure limit before giving up
 - Logs first error, 5th error, then every 10 minutes to reduce log spam
-- Logs seeding deferrals at most every 10 minutes to prevent log spam
-- Gives up after 20 consecutive deletion failures to prevent infinite retry loops
 - Immediately marks torrent as deleted if "info-hash not found" error received
 """
 
@@ -39,6 +44,7 @@ import shlex
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Dict, Any, List
+from xmlrpc.client import ProtocolError
 
 from .models import TransferJob, TorrentServer, UserTorrentSettings
 from .logger import logger
@@ -79,8 +85,6 @@ class TransferService:
         self._semaphore = asyncio.Semaphore(max_concurrent)
         # Track deletion errors for reduced-frequency logging
         self._deletion_errors: Dict[str, Dict[str, Any]] = {}
-        # Track seeding deferrals for reduced-frequency logging
-        self._seeding_deferrals: Dict[str, float] = {}  # job_key -> last_logged_time
 
     def queue_transfer(
         self,
@@ -323,6 +327,11 @@ class TransferService:
             job.progress_percent = 100.0
             job.error = "Already exists at destination"
             job.save()
+
+            # Handle auto-delete even when transfer was skipped
+            if job.auto_delete_after:
+                await self._delete_remote(job, server)
+
             return True
 
         cmd = self._build_rsync_command(job, server)
@@ -434,29 +443,37 @@ class TransferService:
         """
         Delete remote torrent and data after successful transfer.
 
-        Only deletes if the torrent is not actively seeding. If still seeding,
-        returns False so it can be retried later via process_pending_deletions().
+        Only deletes if the torrent has met its seeding threshold or has stopped seeding.
+        If still seeding below threshold, defers deletion for later retry.
 
-        Respects the poller's circuit breaker: if the server is in cooldown due to
-        connection failures, skips deletion check to avoid timeout delays.
+        Respects the poller's circuit breaker: if the server is experiencing connection
+        failures, skips deletion check to avoid timeout delays.
 
         Returns True if deletion was performed or torrent no longer exists.
-        Returns False if deletion was deferred (seeding or server unreachable).
+        Returns False if deletion was deferred (still seeding below threshold or server unreachable).
 
-        Gives up after 20 consecutive failures and marks the torrent as deleted
-        to prevent infinite retry loops.
+        Network errors (connection timeouts, 502 Bad Gateway, etc.) are retried
+        indefinitely. Non-network errors count toward a 20-failure limit before
+        giving up and marking the torrent as deleted.
         """
         import time
 
         # Track deletion failures per job instead of per server
         job_key = f"{server.id}:{job.torrent_hash}"
 
-        # Check if server is in circuit breaker cooldown (poller has detected it's unreachable)
+        # Check if server is experiencing connection issues (poller has detected errors)
         from .polling import get_poller
         poller = get_poller()
         server_cache = poller._cache.get(server.id)
-        if server_cache and server_cache.skip_until > time.time():
-            # Server is in cooldown, skip deletion check to avoid timeout
+
+        # Skip if poller hasn't cached this server yet (poller hasn't polled it at least once)
+        # This prevents deletion attempts before we know the server's health status
+        if server_cache is None:
+            logger.debug(f"Skipping deletion check for {job.torrent_name} - server {server.name} not yet polled")
+            return False
+
+        # Skip if circuit breaker is engaged
+        if server_cache.skip_until > time.time():
             logger.debug(f"Skipping deletion check for {job.torrent_name} - server {server.name} in circuit breaker cooldown")
             return False
 
@@ -480,24 +497,40 @@ class TransferService:
                 # Clear tracking on success
                 if job_key in self._deletion_errors:
                     del self._deletion_errors[job_key]
-                if job_key in self._seeding_deferrals:
-                    del self._seeding_deferrals[job_key]
                 return True
 
-            # Check if actively seeding (complete and active)
-            if torrent.get("complete") and torrent.get("is_active"):
-                # Use reduced-frequency logging for seeding deferrals (log every 10 minutes)
-                current_time = time.time()
-                last_logged = self._seeding_deferrals.get(job_key, 0.0)
-                if (current_time - last_logged) >= 600:  # 10 minutes
-                    logger.debug(f"Torrent still seeding, deferring deletion: {job.torrent_name}")
-                    self._seeding_deferrals[job_key] = current_time
-                # Clear error tracking - this is expected behavior, not an error
-                if job_key in self._deletion_errors:
-                    del self._deletion_errors[job_key]
-                return False
+            # Check if torrent is actively seeding and whether it has met its threshold
+            is_seeding = torrent.get("complete") and torrent.get("is_active")
 
-            # Safe to delete - torrent is stopped or not seeding
+            if is_seeding:
+                # Calculate seeding duration and check against threshold
+                from .activity import Activity
+                activity = Activity()
+                try:
+                    seeding_duration = activity.calculate_seeding_duration(
+                        job.torrent_hash,
+                        max_interval=Config.MAX_INTERVAL
+                    )
+
+                    # Determine threshold based on torrent type
+                    is_private = activity.is_torrent_private(job.torrent_hash)
+                    threshold = (Config.PRIVATE_SEED_DURATION if is_private
+                                else Config.PUBLIC_SEED_DURATION)
+
+                    if seeding_duration < threshold:
+                        # Still seeding below threshold - defer deletion
+                        logger.debug(
+                            f"Torrent still seeding below threshold, deferring deletion: "
+                            f"{job.torrent_name} ({seeding_duration:.0f}s / {threshold}s seeded)"
+                        )
+                        # Clear error tracking - this is expected behavior, not an error
+                        if job_key in self._deletion_errors:
+                            del self._deletion_errors[job_key]
+                        return False
+                finally:
+                    activity.close()
+
+            # Safe to delete - either threshold met or torrent stopped
             # First remove from rtorrent (don't use delete_data - it only works locally)
             client.erase(job.torrent_hash, delete_data=False)
             logger.info(f"Removed torrent from rtorrent: {job.torrent_name}")
@@ -511,8 +544,6 @@ class TransferService:
             # Clear tracking on success
             if job_key in self._deletion_errors:
                 del self._deletion_errors[job_key]
-            if job_key in self._seeding_deferrals:
-                del self._seeding_deferrals[job_key]
             return True
 
         except Exception as e:
@@ -526,6 +557,13 @@ class TransferService:
                 "torrent not found" in error_str.lower()
             )
 
+            # Check if this is a temporary network error
+            # ProtocolError covers HTTP-level errors like 502 Bad Gateway
+            is_network_error = isinstance(e, (ConnectionError, ProtocolError)) or any(
+                phrase in error_str.lower()
+                for phrase in ["connection refused", "network unreachable", "connection timeout", "dns resolution failed"]
+            )
+
             if job_key not in self._deletion_errors:
                 self._deletion_errors[job_key] = {
                     'count': 0,
@@ -533,7 +571,9 @@ class TransferService:
                     'first_error_time': current_time
                 }
 
-            self._deletion_errors[job_key]['count'] += 1
+            # Only increment count for non-network errors
+            if not is_network_error:
+                self._deletion_errors[job_key]['count'] += 1
             error_count = self._deletion_errors[job_key]['count']
             last_logged = self._deletion_errors[job_key]['last_logged']
 
@@ -546,11 +586,9 @@ class TransferService:
                 job.save()
                 if job_key in self._deletion_errors:
                     del self._deletion_errors[job_key]
-                if job_key in self._seeding_deferrals:
-                    del self._seeding_deferrals[job_key]
                 return True
 
-            # Give up after 20 consecutive failures (prevents infinite retry loops)
+            # Give up after 20 consecutive non-network failures (prevents infinite retry loops)
             if error_count >= 20:
                 logger.warning(
                     f"Giving up on deleting remote torrent {job.torrent_name} on {server.name} "
@@ -560,21 +598,32 @@ class TransferService:
                 job.save()
                 if job_key in self._deletion_errors:
                     del self._deletion_errors[job_key]
-                if job_key in self._seeding_deferrals:
-                    del self._seeding_deferrals[job_key]
                 return True
 
             # Log errors with reduced frequency for persistent failures
-            # First error, 5th error, then every 10 minutes
-            should_log = (
-                error_count == 1 or
-                error_count == 5 or
-                (current_time - last_logged) >= 600
-            )
+            # For network errors: first error, then every 10 minutes
+            # For other errors: first error, 5th error, then every 10 minutes
+            if is_network_error:
+                should_log = (
+                    last_logged == 0.0 or
+                    (current_time - last_logged) >= 600
+                )
+            else:
+                should_log = (
+                    error_count == 1 or
+                    error_count == 5 or
+                    (current_time - last_logged) >= 600
+                )
 
             if should_log:
-                if error_count == 1:
+                error_type = "network error" if is_network_error else "error"
+                if last_logged == 0.0:
                     logger.error(f"Failed to delete remote torrent {job.torrent_name} on {server.name}: {e}")
+                elif is_network_error:
+                    logger.error(
+                        f"Failed to delete remote torrent {job.torrent_name} on {server.name} "
+                        f"(network error, will keep retrying): {e}"
+                    )
                 else:
                     logger.error(
                         f"Failed to delete remote torrent {job.torrent_name} on {server.name} "
@@ -619,16 +668,49 @@ class TransferService:
 
         Finds jobs with auto_delete_after=True, status=completed, and
         remote_deleted=False, then attempts deletion for each.
+
+        Skips deletions for servers that are experiencing connection issues
+        to prevent flooding logs with timeout errors.
+
+        Groups deletions by server to check health once per server instead of
+        once per torrent, preventing log spam when multiple torrents are queued
+        for deletion on an unreachable server.
         """
+        import time
+        from collections import defaultdict
+        from .polling import get_poller
+
         pending_deletions = list(TransferJob.select().where(
             (TransferJob.status == "completed") &
             (TransferJob.auto_delete_after == True) &
             (TransferJob.remote_deleted == False)
         ).limit(10))
 
+        # Group deletions by server to check health once per server
+        jobs_by_server = defaultdict(list)
         for job in pending_deletions:
-            server = TorrentServer.get_or_none(TorrentServer.id == job.server_id)
-            if server:
+            jobs_by_server[job.server_id].append(job)
+
+        poller = get_poller()
+
+        for server_id, jobs in jobs_by_server.items():
+            server = TorrentServer.get_or_none(TorrentServer.id == server_id)
+            if not server:
+                continue
+
+            # Check server health once per server (not once per torrent)
+            server_cache = poller._cache.get(server.id)
+
+            # Skip all jobs for this server if poller hasn't cached it yet
+            if server_cache is None:
+                continue
+
+            # Skip all jobs for this server if circuit breaker is engaged
+            if server_cache.skip_until > time.time():
+                continue
+
+            # Server is healthy - process all pending deletions for it
+            for job in jobs:
                 await self._delete_remote(job, server)
 
     async def process_pending_jobs(self):

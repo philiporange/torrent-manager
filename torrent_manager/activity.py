@@ -43,7 +43,8 @@ class Activity:
         Calculate total seeding duration from status records.
 
         Uses max_interval with 20% buffer to account for timing variations
-        in the background task execution.
+        in the background task execution. Includes time from the last seeding
+        record to now if the torrent is still seeding.
         """
         logs = (Status
                 .select()
@@ -65,6 +66,12 @@ class Activity:
                 last_seeding_time = log.timestamp
             else:
                 last_seeding_time = None
+
+        # If the last record was seeding, add time from then to now
+        if last_seeding_time is not None:
+            time_since_last_record = (datetime.datetime.now() - last_seeding_time).total_seconds()
+            if time_since_last_record <= interval_threshold:
+                seeding_duration += time_since_last_record
 
         return seeding_duration
 

@@ -17,11 +17,11 @@ Error handling includes tracking consecutive failures and reducing log noise
 for persistent connection issues. Errors are logged immediately on first failure,
 at 10 consecutive failures, and then every 30 minutes for ongoing issues.
 
-Circuit breaker pattern is implemented: after 5 consecutive failures, a server is
-temporarily skipped to avoid repeated timeout delays. DNS failures, network unreachable
-errors, and malformed XML-RPC responses (indicating the server is likely offline or
-misconfigured) trigger a 30-minute cooldown, while other connection errors trigger a
-5-minute cooldown. The server is automatically retried after the cooldown period.
+Circuit breaker pattern is implemented: persistent errors (DNS failures, connection
+timeouts, network unreachable, malformed XML-RPC) engage after 2 consecutive failures
+with a 30-minute cooldown, as they indicate the server is offline. Transient errors
+engage after 5 consecutive failures with a 5-minute cooldown. The server is automatically
+retried after the cooldown period.
 """
 
 import asyncio
@@ -76,10 +76,10 @@ class TorrentPoller:
         Returns a ServerCache with the poll results, including any newly
         completed torrents detected since the last poll.
 
-        Implements circuit breaker pattern: after 5 consecutive failures, skip polling
-        for an extended period to reduce unnecessary timeouts. DNS failures, network
-        unreachable errors, and malformed XML-RPC responses trigger a 30-minute cooldown
-        (server likely offline or misconfigured), while other errors trigger a 5-minute cooldown.
+        Implements circuit breaker pattern: persistent errors (DNS failures, connection
+        timeouts, network unreachable, malformed XML-RPC) engage after 2 consecutive
+        failures with a 30-minute cooldown (server likely offline). Transient errors
+        engage after 5 consecutive failures with a 5-minute cooldown.
         """
         cache = ServerCache(last_poll=time.time())
         old_cache = self._cache.get(server.id)
@@ -143,20 +143,24 @@ class TorrentPoller:
             else:
                 cache.consecutive_errors = 1
 
-            # Circuit breaker: after 5 consecutive failures, skip for extended period
-            # DNS failures, network unreachable, and malformed XML-RPC responses get longer cooldown (30 min)
-            # as they indicate persistent issues (server down or misconfigured)
-            # Other failures get shorter cooldown (5 min) as they may be transient
-            if cache.consecutive_errors >= 5:
-                is_persistent_error = (
-                    "DNS resolution failed" in cache.error or
-                    "Name or service not known" in cache.error or
-                    "Network unreachable" in cache.error or
-                    "Malformed XML-RPC response" in cache.error
-                )
+            # Circuit breaker: after consecutive failures, skip for extended period
+            # DNS failures, connection timeouts, network unreachable, and malformed XML-RPC
+            # responses get longer cooldown (30 min) and engage after just 2 failures as
+            # they indicate persistent issues (server down or misconfigured).
+            # Other failures get shorter cooldown (5 min) and engage after 5 failures
+            # as they may be transient
+            is_persistent_error = (
+                "DNS resolution failed" in cache.error or
+                "Name or service not known" in cache.error or
+                "Connection timeout" in cache.error or
+                "Network unreachable" in cache.error or
+                "Malformed XML-RPC response" in cache.error
+            )
+            failure_threshold = 2 if is_persistent_error else 5
+            if cache.consecutive_errors >= failure_threshold:
                 cooldown_minutes = 30 if is_persistent_error else 5
                 cache.skip_until = time.time() + (cooldown_minutes * 60)
-                if cache.consecutive_errors == 5:
+                if cache.consecutive_errors == failure_threshold:
                     error_type = (
                         'DNS/network failure - likely offline' if is_persistent_error
                         else 'connection issue'
